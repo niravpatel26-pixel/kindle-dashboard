@@ -68,7 +68,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const ov = { device: dev };
   if (args.includes('--no-clock')) ov.clock = { show: false };
   if (get('--demo')) ov.demo = get('--demo');
-  if (get('--from') || get('--to')) ov.transit = { ...(get('--from') ? { from: get('--from') } : {}), ...(get('--to') ? { to: get('--to') } : {}) };
+  if (get('--from') || get('--to') || get('--trip')) ov.transit = { ...(get('--from') ? { from: get('--from') } : {}), ...(get('--to') ? { to: get('--to') } : {}), ...(get('--trip') ? { trip: get('--trip') } : {}) };
   setOverrides(ov);
   const outName = get('--out');
   if (args.includes('--html')) {

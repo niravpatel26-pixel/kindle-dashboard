@@ -8,6 +8,8 @@
   "transit": {
     "from": "OA",
     "to": "UN",
+    "trip": "auto",
+    "flipAt": "12:00",
     "metrolinxKey": "paste-your-key-here"
   },
   "library": {

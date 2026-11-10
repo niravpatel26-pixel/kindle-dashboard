@@ -183,7 +183,7 @@ function trainStrip(tr) {
 }
 
 function renderTransit(tr, config, maxTrains) {
-  const dirLabel = tr.direction === 'route' ? 'Next trains' : tr.direction === 0 ? 'Departures' : tr.direction === 1 ? 'To Union' : 'All trains';
+  const dirLabel = tr.direction === 'route' ? `${tr.back ? 'Returning' : 'Going'}${tr.trip === 'auto' ? ' · auto' : ''}` : tr.direction === 0 ? 'Departures' : tr.direction === 1 ? 'To Union' : 'All trains';
   const title = tr.toName ? `${esc(tr.stopName ?? '')} → ${esc(tr.toName)}` : esc(tr.stopName ?? '');
   const live = tr.live ? ' · live' : '';
   let rows;

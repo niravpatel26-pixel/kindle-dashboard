@@ -50,8 +50,9 @@ is git-ignored; `config.json` holds the shipped defaults). Keys:
 | `units.temperature` | `celsius` or `fahrenheit` |
 | `clock.show` | `false` to hide the big clock (makes sense for hourly refreshes) |
 | `clock.hour12` | `true` for 5:26 pm |
-| `transit.from` | the station you leave from, e.g. `OA` (Oakville). `node src/transit.js --stations` lists codes |
-| `transit.to` | where you are going, e.g. `UN` (Union). Only trains that run from → to are shown, with arrival time. Leave empty for a plain departure board |
+| `transit.from`, `transit.to` | your two stations, e.g. `OA` and `UN`. Only trains that run between them are shown, with the arrival time. Easiest to set on the settings page |
+| `transit.trip` | `there` (from → to), `back` (to → from) or `auto` (there until `flipAt`, back after) |
+| `transit.flipAt` | when `auto` switches to the return trip, default `12:00` |
 | `transit.direction` | only without `to`: `auto` (outbound at Union, "to Union" elsewhere), `0`, `1` or `all` |
 | `transit.lines` | e.g. `["LW","LE"]` to filter; empty = all rail lines |
 | `transit.metrolinxKey` | optional: a free Metrolinx Open Data key adds platforms and delays |
@@ -78,16 +79,25 @@ current time and cached weather (refetched every 10 minutes).
 
 ### GO trains
 
+Open the **settings page** the server prints on start, e.g.
+`http://192.168.x.x:8080/settings`, from any phone or laptop on your Wi-Fi.
+Pick the station you leave from and the one you go to, save, and the board
+shows only trains that run between them, each with its arrival time. The
+three big buttons at the top switch the direction: **Going**, **Returning**,
+or **Auto**, which shows the trip out until a time you choose and the trip
+home after. The Kindle picks the change up at its next refresh. The page has
+no login: it is meant for your home network only.
+
 Departures come from the public GO GTFS schedule (downloaded once a day,
 about 10 MB, no key). With a clock on the page and trains enabled, the
-forecast shows 5 days instead of 7 so everything fits. Real-time platforms
+forecast shows 4 or 5 days instead of 7 so everything fits. Real-time platforms
 and delays need a key from the Metrolinx Open Data API; registration is free
 but processed by hand (up to ten business days):
 https://api.openmetrolinx.com/OpenDataAPI/Help/Registration/en . Paste it into
-`transit.metrolinxKey`. Check what the panel will show for a route:
+`transit.metrolinxKey`. Check what the panel will show for a route from the command line:
 
 ```bash
-cd dashboard && node src/transit.js --from OA --to UN
+cd dashboard && node src/transit.js --from OA --to UN --trip auto
 ```
 
 ### The frog

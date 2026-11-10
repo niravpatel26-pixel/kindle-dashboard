@@ -16,7 +16,7 @@ const META = path.join(OUT, 'go-gtfs.meta.json');
 const execFileP = promisify(execFile);
 
 // ---------- feed download (checked daily, re-downloaded when the ETag changes) ----------
-async function ensureFeed() {
+export async function ensureFeed() {
   let meta = {};
   try { meta = JSON.parse(fs.readFileSync(META, 'utf8')); } catch { /* none yet */ }
   const have = fs.existsSync(path.join(FEED, 'stop_times.txt'));
@@ -141,10 +141,20 @@ async function getIndex(fromId, toId) {
   return idx;
 }
 
-export function routeOf(t = {}) {
-  const from = String(t.from ?? t.stop ?? 'UN').toUpperCase();
-  const to = t.to ? String(t.to).toUpperCase() : null;
-  return { from, to: to && to !== from ? to : null };
+// Which way are we riding right now? `trip` is "there" (from → to), "back"
+// (to → from) or "auto" (there until flipAt, back after).
+export function routeOf(t = {}, now = new Date(), tz = 'UTC') {
+  let from = String(t.from ?? t.stop ?? 'UN').toUpperCase();
+  let to = t.to ? String(t.to).toUpperCase() : null;
+  if (!to || to === from) return { from, to: null, trip: null, back: false };
+  const trip = ['there', 'back', 'auto'].includes(t.trip) ? t.trip : 'there';
+  let back = trip === 'back';
+  if (trip === 'auto') {
+    const hm = new Intl.DateTimeFormat('en-CA', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).format(now).replace('24', '00');
+    back = hm >= (t.flipAt || '12:00');
+  }
+  if (back) [from, to] = [to, from];
+  return { from, to, trip, back };
 }
 
 // ---------- time helpers ----------
@@ -222,7 +232,7 @@ function overlay(departures, lines) {
 
 export async function getTransit(config, now = new Date()) {
   const t = config.transit ?? {};
-  const { from, to } = routeOf(t);
+  const { from, to, trip, back } = routeOf(t, now, config.location.timezone);
   const idx = await getIndex(from, to);
   const { departures, recent } = nextDepartures(idx, config, now);
   let live = false, liveError = null;
@@ -232,7 +242,7 @@ export async function getTransit(config, now = new Date()) {
   }
   const dir = idx.toId ? 'route' : (t.direction === 'auto' || t.direction == null ? (idx.stopId === 'UN' ? 0 : 1) : t.direction);
   const short = (n) => (n ?? '').replace(/\s+GO( Centre)?$/, (m, c) => (c ? ' Centre' : ''));
-  return { stopId: idx.stopId, stopName: short(idx.stopName), toId: idx.toId, toName: idx.toId ? short(idx.toName) : null, departures, recent, live, liveError, direction: dir };
+  return { stopId: idx.stopId, stopName: short(idx.stopName), toId: idx.toId, toName: idx.toId ? short(idx.toName) : null, trip, back, departures, recent, live, liveError, direction: dir };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
@@ -247,8 +257,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     config.transit = { ...config.transit };
     if (get('--from')) config.transit.from = get('--from');
     if (get('--to')) config.transit.to = get('--to');
+    if (get('--trip')) config.transit.trip = get('--trip');
     const r = await getTransit(config);
-    const how = r.direction === 'route' ? `→ ${r.toName} (${r.toId})` : r.direction === 0 ? 'outbound' : r.direction === 1 ? 'to Union' : 'all';
+    const how = r.direction === 'route' ? `→ ${r.toName} (${r.toId}) [${r.back ? 'returning' : 'going'}${r.trip === 'auto' ? ', auto' : ''}]` : r.direction === 0 ? 'outbound' : r.direction === 1 ? 'to Union' : 'all';
     console.log(`${r.stopName} (${r.stopId}) ${how}${r.live ? ' [live]' : ''}${r.liveError ? ' live error: ' + r.liveError : ''}`);
     for (const d of r.departures) console.log(`${d.hhmm}  ${d.line.padEnd(3)} ${d.dest.padEnd(26)}${d.arrHm ? ' arr ' + d.arrHm + ' (' + d.mins + ' min)' : ''}  in ${d.inMin} min${d.platform ? '  pl ' + d.platform : ''}${d.status ? '  ' + d.status : ''}`);
   }

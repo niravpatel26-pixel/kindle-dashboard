@@ -14,6 +14,17 @@ function merge(a, b) {
   return out;
 }
 
+const LOCAL = path.join(ROOT, 'config.local.json');
+export function readLocalConfig() {
+  try { return JSON.parse(fs.readFileSync(LOCAL, 'utf8')); } catch { return {}; }
+}
+// Deep-merge a patch into config.local.json (the settings page uses this).
+export function writeLocalConfig(patch) {
+  const next = merge(readLocalConfig(), patch);
+  fs.writeFileSync(LOCAL, JSON.stringify(next, null, 2) + '\n');
+  return next;
+}
+
 let overrides = {};
 export function setOverrides(o) { overrides = o; }
 

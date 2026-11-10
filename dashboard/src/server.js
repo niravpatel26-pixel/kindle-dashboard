@@ -6,12 +6,25 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { renderPng, buildHtml, loadConfig, OUT } from './render.js';
 import { scanLibrary, resolveBook, opdsFeed } from './library.js';
+import { listStations, ensureFeed, getTransit } from './transit.js';
+import { writeLocalConfig } from './config.js';
+import { settingsPage } from './settings.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const config = loadConfig();
 const PORT = Number(process.env.PORT || config.server?.port || 8080);
 const LIB_ROOTS = (config.library?.paths ?? ['../books']).map((p) => path.resolve(ROOT, p));
 const MIME = { '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff', '.png': 'image/png', '.html': 'text/html' };
+
+let stationCache = null;
+async function stations() {
+  if (!stationCache) { await ensureFeed(); stationCache = listStations(); }
+  return stationCache;
+}
+async function formBody(req) {
+  let b = ''; for await (const chunk of req) b += chunk;
+  return new URLSearchParams(b);
+}
 
 let queue = Promise.resolve(); // renders run one at a time
 const enqueue = (fn) => (queue = queue.then(fn, fn));
@@ -41,6 +54,30 @@ const server = http.createServer(async (req, res) => {
       if (!fs.existsSync(file)) { res.writeHead(404); return res.end('render first'); }
       res.writeHead(200, { 'Content-Type': 'image/png' });
       fs.createReadStream(file).pipe(res);
+    } else if (url.pathname === '/settings' && req.method === 'GET') {
+      const cfg = loadConfig();
+      const st = await stations();
+      let next = null;
+      if (cfg.transit?.enabled) { try { next = await getTransit(cfg); } catch (e) { next = { error: e.message, departures: [] }; } }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(settingsPage({ cfg, stations: st, next, saved: url.searchParams.get('saved'), error: url.searchParams.get('error') }));
+      log(req, 200, t0);
+    } else if (url.pathname === '/toggle' && req.method === 'POST') {
+      const trip = (await formBody(req)).get('trip');
+      if (!['there', 'back', 'auto'].includes(trip)) { res.writeHead(400); return res.end('bad trip'); }
+      writeLocalConfig({ transit: { trip } });
+      res.writeHead(303, { Location: '/settings?saved=1' }); res.end();
+      log(req, 303, t0, `trip=${trip}`);
+    } else if (url.pathname === '/settings' && req.method === 'POST') {
+      const b = await formBody(req);
+      const codes = new Set((await stations()).map((s) => s.id));
+      const from = (b.get('from') ?? '').toUpperCase(), to = (b.get('to') ?? '').toUpperCase();
+      if (!codes.has(from)) { res.writeHead(303, { Location: '/settings?error=' + encodeURIComponent('Unknown station: ' + from) }); return res.end(); }
+      const flipAt = /^\d{2}:\d{2}$/.test(b.get('flipAt') ?? '') ? b.get('flipAt') : '12:00';
+      const count = Math.min(6, Math.max(1, parseInt(b.get('count') ?? '4', 10) || 4));
+      writeLocalConfig({ transit: { from, to: codes.has(to) && to !== from ? to : '', flipAt, count } });
+      res.writeHead(303, { Location: '/settings?saved=1' }); res.end();
+      log(req, 303, t0, `route ${from}→${to || '-'}`);
     } else if (url.pathname === '/opds' || url.pathname === '/opds/') {
       const books = scanLibrary(LIB_ROOTS);
       const baseUrl = `http://${req.headers.host}`;
@@ -74,6 +111,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`Kindle dashboard server on port ${PORT}`);
   for (const ip of ips) console.log(`  Kindle URL: http://${ip}:${PORT}/dashboard.png`);
   console.log(`  Preview:    http://localhost:${PORT}/`);
+  for (const ip of ips) console.log(`  Settings (open on your phone): http://${ip}:${PORT}/settings`);
   for (const ip of ips) console.log(`  KOReader OPDS catalogue: http://${ip}:${PORT}/opds`);
   console.log(`  Library folders: ${LIB_ROOTS.join(', ')}`);
 });

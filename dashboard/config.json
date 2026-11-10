@@ -30,6 +30,8 @@
     "enabled": true,
     "from": "UN",
     "to": "",
+    "trip": "auto",
+    "flipAt": "12:00",
     "direction": "auto",
     "lines": [],
     "count": 4,
