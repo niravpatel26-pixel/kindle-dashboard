@@ -1,0 +1,18 @@
+{
+  "location": {
+    "name": "Toronto",
+    "latitude": 43.6532,
+    "longitude": -79.3832,
+    "timezone": "America/Toronto"
+  },
+  "transit": {
+    "stop": "UN",
+    "metrolinxKey": "paste-your-key-here"
+  },
+  "library": {
+    "paths": [
+      "../books",
+      "/Users/you/Books"
+    ]
+  }
+}

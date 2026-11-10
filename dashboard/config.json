@@ -1,0 +1,49 @@
+{
+  "device": {
+    "preset": "PW4",
+    "orientation": "portrait",
+    "gamma": 1.0
+  },
+  "location": {
+    "name": "Toronto",
+    "latitude": 43.6532,
+    "longitude": -79.3832,
+    "timezone": "America/Toronto"
+  },
+  "units": {
+    "temperature": "celsius",
+    "wind": "kmh"
+  },
+  "locale": "en-CA",
+  "clock": {
+    "show": true,
+    "hour12": false
+  },
+  "hourly": {
+    "slots": 8,
+    "stepHours": 3
+  },
+  "daily": {
+    "days": 7
+  },
+  "transit": {
+    "enabled": true,
+    "stop": "UN",
+    "direction": "auto",
+    "lines": [],
+    "count": 4,
+    "metrolinxKey": ""
+  },
+  "cache": {
+    "weatherMinutes": 10
+  },
+  "server": {
+    "port": 8080
+  },
+  "library": {
+    "title": "Mac library",
+    "paths": [
+      "../books"
+    ]
+  }
+}

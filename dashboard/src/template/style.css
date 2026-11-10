@@ -1,0 +1,187 @@
+/* Kindle e-ink dashboard. All sizes in vmin so portrait and landscape share type scale. */
+:root {
+  --ink: #000;
+  --ink-2: #333;
+  --ink-3: #6a6a6a;
+  --rule: #000;
+  --rule-soft: #b4b4b4;
+  --track: #d6d6d6;
+  --pad: 6vmin;
+  --sans: 'Inter', system-ui, sans-serif;
+  --serif: 'Fraunces', Georgia, serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; background: #fff; color: var(--ink); }
+body {
+  font-family: var(--sans);
+  font-size: 2.3vmin;
+  line-height: 1.25;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "tnum" 1, "cv11" 1;
+  overflow: hidden;
+}
+.icon { width: 1em; height: 1em; display: inline-block; vertical-align: -0.15em; }
+.num { font-family: var(--serif); font-weight: 500; font-feature-settings: "tnum" 1; }
+
+.page {
+  width: 100vw; height: 100vh;
+  padding: var(--pad);
+  display: grid;
+  grid-template-rows: var(--rows, auto auto auto auto minmax(0, 1fr));
+  row-gap: 2.6vmin;
+}
+
+/* ---- header ---- */
+.top { display: flex; justify-content: space-between; align-items: baseline; }
+.top .date { font-weight: 600; font-size: 2.6vmin; letter-spacing: 0.02em; }
+.top .meta { color: var(--ink-3); font-size: 2.2vmin; display: flex; gap: 2.4vmin; align-items: baseline; }
+.top .meta .place { color: var(--ink-2); font-weight: 500; }
+.top .meta .battery { color: var(--ink-2); }
+.top .meta .battery .icon { width: 1.5em; vertical-align: -0.25em; }
+
+/* ---- clock ---- */
+.clock {
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 21vmin;
+  line-height: 0.95;
+  letter-spacing: -0.035em;
+  padding-bottom: 2.4vmin;
+  border-bottom: 0.4vmin solid var(--rule);
+  font-feature-settings: "tnum" 1;
+}
+.clock small { font-family: var(--sans); font-weight: 500; font-size: 3vmin; letter-spacing: 0.08em; margin-left: 1.4vmin; vertical-align: 3vmin; }
+.page.no-clock .clock { display: none; }
+.page.no-clock .now .big .temp { font-size: 20vmin; }
+.page.no-clock .now .big .icon { width: 15vmin; height: 15vmin; }
+
+/* ---- current conditions ---- */
+.now { display: grid; grid-template-columns: auto 1fr; column-gap: 4vmin; align-items: center; }
+.now .big { display: flex; align-items: center; gap: 2vmin; }
+.now .big .icon { width: 13vmin; height: 13vmin; stroke-width: 1.35; }
+.now .big .temp { font-size: 17vmin; line-height: 0.9; letter-spacing: -0.04em; }
+.now .big .temp sup { font-size: 0.45em; vertical-align: 0.9em; margin-left: 0.04em; font-weight: 400; }
+.now .desc .cond { font-size: 4.4vmin; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 1vmin; }
+.now .desc .sub { color: var(--ink-3); font-size: 2.4vmin; }
+.now .stats {
+  grid-column: 1 / -1;
+  list-style: none;
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  margin-top: 3vmin; padding-top: 2.4vmin;
+  border-top: 0.15vmin solid var(--rule-soft);
+  column-gap: 2vmin;
+}
+.now .stats li { display: flex; flex-direction: column; gap: 0.6vmin; }
+.now .stats .k { color: var(--ink-3); font-size: 2vmin; letter-spacing: 0.04em; text-transform: uppercase; }
+.now .stats .v { font-size: 3.1vmin; font-weight: 500; white-space: nowrap; }
+.now .stats .v .icon { color: var(--ink-2); margin-right: 0.3em; }
+
+/* ---- hourly ---- */
+.hourly {
+  display: grid;
+  grid-auto-flow: column; grid-auto-columns: 1fr;
+  text-align: center;
+  padding: 2.4vmin 0;
+  border-top: 0.4vmin solid var(--rule);
+  border-bottom: 0.15vmin solid var(--rule-soft);
+}
+.hourly .slot { display: flex; flex-direction: column; align-items: center; gap: 1.2vmin; }
+.hourly .t { color: var(--ink-3); font-size: 2vmin; }
+.hourly .icon { width: 4.6vmin; height: 4.6vmin; }
+.hourly .temp { font-size: 3.4vmin; }
+.hourly .pop { color: var(--ink-3); font-size: 2vmin; }
+.hourly .pop.hi { color: var(--ink); font-weight: 600; }
+
+/* ---- GO trains ---- */
+.transit { border-top: 0.4vmin solid var(--rule); padding-top: 1.8vmin; }
+.transit .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.8vmin; }
+.transit .title { font-weight: 600; font-size: 2.6vmin; }
+.transit .title .icon { width: 1.1em; height: 1.1em; vertical-align: -0.2em; margin-right: 0.3em; }
+.transit .sub { color: var(--ink-3); font-size: 2vmin; letter-spacing: 0.03em; }
+.transit .strip { display: block; width: 100%; height: auto; margin: 0.4vmin 0 0.6vmin; }
+.train {
+  display: grid; grid-template-columns: 8.5vmin 7vmin 1fr auto;
+  align-items: center; column-gap: 2vmin;
+  padding: 0.7vmin 0; border-bottom: 0.15vmin solid var(--rule-soft);
+}
+.train:last-child { border-bottom: none; }
+.train .t { font-size: 3.2vmin; }
+.train .badge { font-size: 1.9vmin; font-weight: 700; letter-spacing: 0.06em; background: var(--ink); color: #fff; border-radius: 0.7vmin; padding: 0.35vmin 0; text-align: center; }
+.train .dest { font-size: 2.6vmin; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.train .dest small { color: var(--ink-3); font-weight: 400; font-size: 1.9vmin; margin-left: 1vmin; }
+.train .st { color: var(--ink-3); font-size: 2.1vmin; white-space: nowrap; }
+.train .st.soon { color: var(--ink); font-weight: 600; }
+.train .st.late { color: var(--ink); font-weight: 700; }
+.train.none { display: block; color: var(--ink-3); font-size: 2.3vmin; padding: 1.5vmin 0; }
+
+/* ---- daily ---- */
+.daily { display: grid; grid-auto-rows: minmax(6vmin, 1fr); align-content: stretch; min-height: 0; overflow: hidden; }
+.day {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 11vmin 5.5vmin 1fr 6vmin 1fr 6vmin;
+  align-items: center; column-gap: 2vmin;
+  border-bottom: 0.15vmin solid var(--rule-soft);
+}
+.day:last-child { border-bottom: none; }
+.day .name { font-weight: 500; font-size: 2.6vmin; white-space: nowrap; }
+.day .name small { color: var(--ink-3); font-size: 2vmin; font-weight: 400; margin-left: 0.5vmin; }
+.day.today .name { font-weight: 700; }
+.day .icon { width: 4.4vmin; height: 4.4vmin; }
+.day .precip { display: flex; align-items: center; gap: 1.6vmin; color: var(--ink-3); font-size: 2vmin; white-space: nowrap; }
+.day .dots { display: inline-flex; gap: 0.7vmin; }
+.day .dots i { width: 1.5vmin; height: 1.5vmin; border-radius: 50%; border: 0.2vmin solid var(--ink); display: block; }
+.day .dots i.on { background: var(--ink); }
+.day .lo, .day .hi { font-size: 3.2vmin; text-align: right; }
+.day .lo { color: var(--ink-3); }
+.day .bar { position: relative; height: 0.9vmin; background: var(--track); border-radius: 1vmin; }
+.day .bar i { position: absolute; top: 0; bottom: 0; background: var(--ink); border-radius: 1vmin; }
+
+/* ---- error state ---- */
+.error { grid-column: 1 / -1; padding: 3vmin; border: 0.3vmin solid var(--ink); font-size: 2.6vmin; }
+
+/* ---- portrait with clock AND trains: tighten everything so 5 forecast rows fit ---- */
+@media (orientation: portrait) {
+  .page.has-transit:not(.no-clock) { row-gap: 1.9vmin; }
+  .page.has-transit:not(.no-clock) .clock { font-size: 15vmin; padding-bottom: 1.4vmin; }
+  .page.has-transit:not(.no-clock) .now .big .temp { font-size: 13.5vmin; }
+  .page.has-transit:not(.no-clock) .now .big .icon { width: 11vmin; height: 11vmin; }
+  .page.has-transit:not(.no-clock) .now .desc .cond { font-size: 4vmin; }
+  .page.has-transit:not(.no-clock) .now .stats { margin-top: 2vmin; padding-top: 1.6vmin; }
+  .page.has-transit:not(.no-clock) .hourly { padding: 1.5vmin 0; }
+  .page.has-transit:not(.no-clock) .hourly .slot { gap: 0.8vmin; }
+  .page.has-transit:not(.no-clock) .transit .strip { margin: 0.2vmin 0 0.3vmin; }
+  .page.has-transit:not(.no-clock) .transit { padding-top: 1.4vmin; }
+  .page.has-transit:not(.no-clock) .train { padding: 0.5vmin 0; }
+  .page.has-transit:not(.no-clock) .day .lo,
+  .page.has-transit:not(.no-clock) .day .hi { font-size: 3vmin; }
+}
+
+/* ---- landscape: two columns ---- */
+@media (orientation: landscape) {
+  .page {
+    grid-template-columns: 46fr 54fr;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "top    hourly"
+      "clock  transit"
+      "now    daily";
+    column-gap: 6vmin;
+  }
+  .page.no-clock {
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "top    hourly"
+      "now    transit"
+      "now    daily";
+  }
+  .transit { grid-area: transit; align-self: start; }
+  .page:not(.has-transit) { grid-template-areas: "top hourly" "clock daily" "now daily"; }
+  .page.no-clock:not(.has-transit) { grid-template-areas: "top hourly" "now daily"; grid-template-rows: auto minmax(0, 1fr); }
+  .top { grid-area: top; }
+  .clock { grid-area: clock; font-size: 22vmin; }
+  .now { grid-area: now; align-content: start; }
+  .now .stats { grid-template-columns: repeat(2, 1fr); row-gap: 2vmin; }
+  .hourly { grid-area: hourly; border-top: none; padding-top: 0; }
+  .daily { grid-area: daily; }
+}
