@@ -6,7 +6,8 @@
     "timezone": "America/Toronto"
   },
   "transit": {
-    "stop": "UN",
+    "from": "OA",
+    "to": "UN",
     "metrolinxKey": "paste-your-key-here"
   },
   "library": {

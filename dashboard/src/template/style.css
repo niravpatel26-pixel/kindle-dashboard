@@ -39,6 +39,12 @@ body {
 .top .meta .battery { color: var(--ink-2); }
 .top .meta .battery .icon { width: 1.5em; vertical-align: -0.25em; }
 
+/* ---- the frog ---- */
+.clock, .now { position: relative; }
+.frog { position: absolute; right: 0; bottom: 0.6vmin; height: calc(100% - 0.6vmin); max-height: 22vmin; width: auto; }
+.page.no-clock .frog { top: -2vmin; bottom: auto; height: 23vmin; }
+.page.no-clock .now .desc { padding-right: 25vmin; }
+
 /* ---- clock ---- */
 .clock {
   font-family: var(--serif);
@@ -155,6 +161,12 @@ body {
   .page.has-transit:not(.no-clock) .train { padding: 0.5vmin 0; }
   .page.has-transit:not(.no-clock) .day .lo,
   .page.has-transit:not(.no-clock) .day .hi { font-size: 3vmin; }
+  .page.no-clock.has-transit .now .big .temp { font-size: 17vmin; }
+  .page.no-clock.has-transit .now .big .icon { width: 13vmin; height: 13vmin; }
+  .page.no-clock.has-transit .frog { height: 21vmin; top: -1.5vmin; }
+  .page.no-clock.has-transit .now .desc { padding-right: 23vmin; }
+  .page.no-clock.has-transit .transit .strip { margin: 0.2vmin 0 0.3vmin; }
+  .page.no-clock.has-transit .train { padding: 0.5vmin 0; }
 }
 
 /* ---- landscape: two columns ---- */
@@ -179,7 +191,10 @@ body {
   .page:not(.has-transit) { grid-template-areas: "top hourly" "clock daily" "now daily"; }
   .page.no-clock:not(.has-transit) { grid-template-areas: "top hourly" "now daily"; grid-template-rows: auto minmax(0, 1fr); }
   .top { grid-area: top; }
-  .clock { grid-area: clock; font-size: 22vmin; }
+  .clock { grid-area: clock; font-size: 17vmin; }
+  .clock .frog { height: 14.5vmin; bottom: 1.5vmin; }
+  .page.no-clock .now .desc { padding-right: 0; }
+  .page.no-clock .frog { height: 18vmin; top: -1vmin; }
   .now { grid-area: now; align-content: start; }
   .now .stats { grid-template-columns: repeat(2, 1fr); row-gap: 2vmin; }
   .hourly { grid-area: hourly; border-top: none; padding-top: 0; }

@@ -7,31 +7,12 @@ import { getTransit } from './transit.js';
 import { renderHtml } from './template.js';
 import { resolveDevice } from './presets.js';
 import { toKindlePng } from './png.js';
+import { loadConfig, setOverrides } from './config.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 export const OUT = path.join(ROOT, 'out');
 
-// Config from config.json, with optional overrides (used by CLI test renders).
-let overrides = {};
-export function setOverrides(o) { overrides = o; }
-// config.json holds the defaults that ship with the repo. config.local.json
-// (git-ignored) is merged over it: put your location, station, API key and
-// book folders there so they never end up in a commit.
-function merge(a, b) {
-  const out = { ...a };
-  for (const [k, v] of Object.entries(b ?? {})) {
-    out[k] = v && typeof v === 'object' && !Array.isArray(v) && typeof a?.[k] === 'object' ? merge(a[k], v) : v;
-  }
-  return out;
-}
-export function loadConfig() {
-  let c = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
-  const local = path.join(ROOT, 'config.local.json');
-  if (fs.existsSync(local)) c = merge(c, JSON.parse(fs.readFileSync(local, 'utf8')));
-  c.device = { ...c.device, ...overrides.device };
-  if (overrides.clock) c.clock = { ...c.clock, ...overrides.clock };
-  return c;
-}
+export { loadConfig, setOverrides };
 
 let browser;
 async function getBrowser() {
@@ -86,6 +67,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (get('--rotate')) dev.rotate = Number(get('--rotate'));
   const ov = { device: dev };
   if (args.includes('--no-clock')) ov.clock = { show: false };
+  if (get('--demo')) ov.demo = get('--demo');
+  if (get('--from') || get('--to')) ov.transit = { ...(get('--from') ? { from: get('--from') } : {}), ...(get('--to') ? { to: get('--to') } : {}) };
   setOverrides(ov);
   const outName = get('--out');
   if (args.includes('--html')) {

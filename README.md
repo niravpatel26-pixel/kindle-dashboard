@@ -1,8 +1,9 @@
 # Kindle: jailbreak, KOReader, and an e-ink dashboard
 
 Give an old Kindle a second life: a wall-mounted e-ink dashboard (clock,
-weather, next GO trains with a little train that creeps toward the platform)
-and a reader set up the way a reading app should feel. Everything renders on
+weather, your GO train route with a little train that creeps toward the
+platform, and a frog whose outfit follows the weather) and a reader set up
+the way a reading app should feel. Everything renders on
 a computer you already own; the Kindle just fetches a PNG and sleeps.
 
 > **Status**: the renderer and server are tested on macOS. The on-device scripts
@@ -49,8 +50,9 @@ is git-ignored; `config.json` holds the shipped defaults). Keys:
 | `units.temperature` | `celsius` or `fahrenheit` |
 | `clock.show` | `false` to hide the big clock (makes sense for hourly refreshes) |
 | `clock.hour12` | `true` for 5:26 pm |
-| `transit.stop` | GO station code, `UN` = Union. `node src/transit.js --stations` lists them |
-| `transit.direction` | `auto` (outbound at Union, "to Union" elsewhere), `0`, `1` or `all` |
+| `transit.from` | the station you leave from, e.g. `OA` (Oakville). `node src/transit.js --stations` lists codes |
+| `transit.to` | where you are going, e.g. `UN` (Union). Only trains that run from → to are shown, with arrival time. Leave empty for a plain departure board |
+| `transit.direction` | only without `to`: `auto` (outbound at Union, "to Union" elsewhere), `0`, `1` or `all` |
 | `transit.lines` | e.g. `["LW","LE"]` to filter; empty = all rail lines |
 | `transit.metrolinxKey` | optional: a free Metrolinx Open Data key adds platforms and delays |
 | `library.paths` | folders of EPUBs/PDFs published to KOReader as an OPDS catalogue |
@@ -82,11 +84,27 @@ forecast shows 5 days instead of 7 so everything fits. Real-time platforms
 and delays need a key from the Metrolinx Open Data API; registration is free
 but processed by hand (up to ten business days):
 https://api.openmetrolinx.com/OpenDataAPI/Help/Registration/en . Paste it into
-`transit.metrolinxKey`. Check what the panel will show:
+`transit.metrolinxKey`. Check what the panel will show for a route:
 
 ```bash
-cd dashboard && node src/transit.js
+cd dashboard && node src/transit.js --from OA --to UN
 ```
+
+### The frog
+
+A frog sits beside the clock. Sun hat and sunglasses on a clear day, ice
+cream when it is hot, a book under cloud, umbrella and hood in rain, toque and
+mittens in snow, a lantern in fog, a telescope at night, a flying scarf when it
+is windy, leaves or snow on the ground with the season, and a briefcase and a
+sweat drop when your train leaves in the next seven minutes. Preview any
+outfit without waiting for the weather:
+
+```bash
+cd dashboard && node src/render.js --demo snow --out demo.png
+```
+
+States: `sunny hot cloudy rain thunder snow fog night windy rush`. Hide it with
+`"frog": { "show": false }` in the config.
 
 ### The reader's shelf
 

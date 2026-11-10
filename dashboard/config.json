@@ -28,7 +28,8 @@
   },
   "transit": {
     "enabled": true,
-    "stop": "UN",
+    "from": "UN",
+    "to": "",
     "direction": "auto",
     "lines": [],
     "count": 4,

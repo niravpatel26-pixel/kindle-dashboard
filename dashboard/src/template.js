@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { icon, batteryIcon } from './icons.js';
 import { describe, compassPoint } from './weather.js';
+import { frogState, frogSvg, demoState, seasonOf } from './frog.js';
 
 const CSS = fs.readFileSync(path.join(import.meta.dirname, 'template', 'style.css'), 'utf8');
 
@@ -22,6 +23,7 @@ export function renderHtml({ config, device, weather, transit, battery, now, err
   // With trains on the page, 7 forecast rows only fit in portrait without the clock.
   const maxDays = showTransit && showClock && !device.landscape ? 4
     : showTransit && (showClock || device.landscape) ? 5
+    : showTransit ? 5
     : (config.daily?.days ?? 7);
   let body;
   if (!weather) {
@@ -30,10 +32,17 @@ export function renderHtml({ config, device, weather, transit, battery, now, err
     body = [
       renderNow(weather, config, fmt),
       renderHourly(weather, config, fmt, now),
-      showTransit ? renderTransit(transit, config, showClock && !device.landscape ? 3 : undefined) : '',
+      showTransit ? renderTransit(transit, config, device.landscape ? undefined : 3) : '',
       renderDaily(weather, config, fmt, now, maxDays),
     ].join('\n');
   }
+  // The frog lives beside the clock, or beside the current conditions when the clock is hidden.
+  let frog = '';
+  if (config.frog?.show !== false && weather) {
+    const st = config.demo ? demoState(config.demo, seasonOf(now, tz)) : frogState({ weather, transit, config, now });
+    frog = frogSvg(st);
+  }
+  if (!showClock && frog) body = body.replace('<section class="now">', `<section class="now">${frog}`);
   // One grid row per section in portrait; the forecast takes what is left.
   const rowCount = 2 + (showClock ? 1 : 0) + (weather ? 1 : 0) + (showTransit ? 1 : 0);
   const rows = `${'auto '.repeat(rowCount)}minmax(0, 1fr)`;
@@ -64,7 +73,7 @@ export function renderHtml({ config, device, weather, transit, battery, now, err
     <div class="date">${esc(dateStr)}</div>
     <div class="meta"><span class="place">${esc(config.location.name ?? '')}</span>${showClock ? '' : `<span class="updated">Updated ${esc(timeStr)}</span>`}${batt}</div>
   </header>
-  <section class="clock num">${clock}</section>
+  <section class="clock num">${clock}${frog}</section>
   ${body}
 </main>
 </body>
@@ -174,7 +183,8 @@ function trainStrip(tr) {
 }
 
 function renderTransit(tr, config, maxTrains) {
-  const dirLabel = tr.direction === 0 ? 'Departures' : tr.direction === 1 ? 'To Union' : 'All trains';
+  const dirLabel = tr.direction === 'route' ? 'Next trains' : tr.direction === 0 ? 'Departures' : tr.direction === 1 ? 'To Union' : 'All trains';
+  const title = tr.toName ? `${esc(tr.stopName ?? '')} → ${esc(tr.toName)}` : esc(tr.stopName ?? '');
   const live = tr.live ? ' · live' : '';
   let rows;
   if (tr.error) rows = `<div class="train none">${esc(tr.error)}</div>`;
@@ -186,12 +196,12 @@ function renderTransit(tr, config, maxTrains) {
     return `<div class="train">
       <span class="t num">${esc(d.hhmmLive ?? d.hhmm)}</span>
       <span class="badge">${esc(d.line)}</span>
-      <span class="dest">${esc(d.dest)}${d.platform ? `<small>Platform ${esc(d.platform)}</small>` : ''}</span>
+      <span class="dest">${d.arrHm ? `Arrives ${esc(d.arrHm)}<small>${d.mins} min</small>` : esc(d.dest)}${d.platform ? `<small>Platform ${esc(d.platform)}</small>` : ''}</span>
       <span class="st ${cls}">${esc(status)}</span>
     </div>`;
   }).join('');
   return `<section class="transit">
-    <div class="head"><span class="title">${icon('train')} GO · ${esc(tr.stopName ?? '')}</span><span class="sub">${dirLabel}${live}</span></div>
+    <div class="head"><span class="title">${icon('train')} GO · ${title}</span><span class="sub">${dirLabel}${live}</span></div>
     ${tr.error ? '' : trainStrip(tr)}
     ${rows}
   </section>`;

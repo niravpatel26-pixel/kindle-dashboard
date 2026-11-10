@@ -83,13 +83,17 @@ export function listStations() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// ---------- per-station index: every departure in the feed window ----------
-async function buildIndex(stopId) {
+// ---------- per-route index: every departure from `from` in the feed window,
+// with the arrival time at `to` when a destination is configured ----------
+async function buildIndex(fromId, toId) {
   const routes = Object.fromEntries(readCsv(path.join(FEED, 'routes.txt')).map((r) => [r.route_id, r]));
   const trips = new Map(readCsv(path.join(FEED, 'trips.txt')).map((t) => [t.trip_id, t]));
-  const stop = readCsv(path.join(FEED, 'stops.txt')).find((s) => s.stop_id === stopId);
-  if (!stop) throw new Error(`stop "${stopId}" is not in the GO feed (run: node src/transit.js --stations)`);
-  const maxSeq = new Map(); const rows = [];
+  const stops = readCsv(path.join(FEED, 'stops.txt'));
+  const from = stops.find((s) => s.stop_id === fromId);
+  if (!from) throw new Error(`station "${fromId}" is not in the GO feed (run: node src/transit.js --stations)`);
+  const to = toId ? stops.find((s) => s.stop_id === toId) : null;
+  if (toId && !to) throw new Error(`station "${toId}" is not in the GO feed (run: node src/transit.js --stations)`);
+  const maxSeq = new Map(); const rows = []; const atTo = new Map();
   const rl = readline.createInterface({ input: fs.createReadStream(path.join(FEED, 'stop_times.txt')) });
   let first = true;
   for await (const raw of rl) {
@@ -98,35 +102,49 @@ async function buildIndex(stopId) {
     const tripId = v[0], seq = +v[4];
     const m = maxSeq.get(tripId);
     if (m === undefined || seq > m) maxSeq.set(tripId, seq);
-    if (v[3] === stopId) rows.push({ tripId, dep: v[2], seq, pickup: v[5] });
+    if (v[3] === fromId) rows.push({ tripId, dep: v[2], seq, pickup: v[5] });
+    if (toId && v[3] === toId) atTo.set(tripId, { arr: v[1], seq });
   }
   const departures = [];
   for (const r of rows) {
     const t = trips.get(r.tripId);
     if (!t || r.pickup === '1') continue;
     if (r.seq === maxSeq.get(r.tripId)) continue;      // end of the line: an arrival, not a departure
+    let arr = null;
+    if (toId) {
+      const hit = atTo.get(r.tripId);
+      if (!hit || hit.seq <= r.seq) continue;           // this trip does not go on to the destination
+      arr = hit.arr;
+    }
     const route = routes[t.route_id] ?? {};
     departures.push({
-      service: t.service_id, time: r.dep, trip: t.trip_id,
+      service: t.service_id, time: r.dep, arr, trip: t.trip_id,
       line: route.route_short_name ?? '', lineName: route.route_long_name ?? '', type: route.route_type ?? '',
       dir: Number(t.direction_id), headsign: t.trip_headsign ?? '',
     });
   }
   departures.sort((a, b) => a.service.localeCompare(b.service) || a.time.localeCompare(b.time));
-  const idx = { stopId, stopName: stop.stop_name, builtAt: Date.now(), departures };
-  fs.writeFileSync(path.join(OUT, `transit-${stopId}.json`), JSON.stringify(idx));
+  const idx = { stopId: fromId, stopName: from.stop_name, toId: toId || null, toName: to?.stop_name ?? null, builtAt: Date.now(), departures };
+  fs.writeFileSync(path.join(OUT, `transit-${fromId}${toId ? '-' + toId : ''}.json`), JSON.stringify(idx));
   return idx;
 }
 
 const memo = new Map();
-async function getIndex(stopId) {
+async function getIndex(fromId, toId) {
   await ensureFeed();
-  const file = path.join(OUT, `transit-${stopId}.json`);
-  if (memo.has(stopId) && fs.existsSync(file)) return memo.get(stopId);
+  const key = `${fromId}${toId ? '-' + toId : ''}`;
+  const file = path.join(OUT, `transit-${key}.json`);
+  if (memo.has(key) && fs.existsSync(file)) return memo.get(key);
   let idx;
-  try { idx = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { idx = await buildIndex(stopId); }
-  memo.set(stopId, idx);
+  try { idx = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { idx = await buildIndex(fromId, toId); }
+  memo.set(key, idx);
   return idx;
+}
+
+export function routeOf(t = {}) {
+  const from = String(t.from ?? t.stop ?? 'UN').toUpperCase();
+  const to = t.to ? String(t.to).toUpperCase() : null;
+  return { from, to: to && to !== from ? to : null };
 }
 
 // ---------- time helpers ----------
@@ -153,7 +171,8 @@ export function nextDepartures(idx, config, now = new Date()) {
   const t = config.transit ?? {};
   const { ymd, secs } = localClock(now, config.location.timezone);
   const yday = ymdOffset(ymd, -1);
-  const wantDir = t.direction === 'auto' || t.direction == null ? (idx.stopId === 'UN' ? 0 : 1) : t.direction;
+  // With a destination the direction is implied by the route; otherwise auto = outbound at Union, inbound elsewhere.
+  const wantDir = idx.toId ? 'all' : (t.direction === 'auto' || t.direction == null ? (idx.stopId === 'UN' ? 0 : 1) : t.direction);
   const lines = (t.lines ?? []).map((s) => String(s).toUpperCase());
   const out = [];
   for (const d of idx.departures) {
@@ -164,7 +183,9 @@ export function nextDepartures(idx, config, now = new Date()) {
     if (d.service === yday && dep >= 86400) dep -= 86400;   // after-midnight trip of yesterday's service
     else if (d.service !== ymd) continue;
     if (dep < secs - 8 * 60) continue;
-    out.push({ ...d, dest: destination(d.headsign), hhmm: fmtHm(dep), inMin: Math.round((dep - secs) / 60) });
+    let arrHm = null, mins = null;
+    if (d.arr) { let a = hms(d.arr); if (d.service === yday && a >= 86400) a -= 86400; arrHm = fmtHm(a); mins = Math.round((a - dep) / 60); }
+    out.push({ ...d, dest: destination(d.headsign), hhmm: fmtHm(dep), arrHm, mins, inMin: Math.round((dep - secs) / 60) });
   }
   out.sort((a, b) => a.inMin - b.inMin);
   const upcoming = out.filter((d) => d.inMin >= -1);
@@ -201,28 +222,34 @@ function overlay(departures, lines) {
 
 export async function getTransit(config, now = new Date()) {
   const t = config.transit ?? {};
-  const idx = await getIndex(t.stop ?? 'UN');
+  const { from, to } = routeOf(t);
+  const idx = await getIndex(from, to);
   const { departures, recent } = nextDepartures(idx, config, now);
   let live = false, liveError = null;
   if (t.metrolinxKey) {
     try { overlay(departures, await realtime(idx.stopId, t.metrolinxKey)); live = true; }
     catch (e) { liveError = e.message; }
   }
-  const dir = t.direction === 'auto' || t.direction == null ? (idx.stopId === 'UN' ? 0 : 1) : t.direction;
-  return { stopId: idx.stopId, stopName: idx.stopName.replace(/\s+GO$/, ''), departures, recent, live, liveError, direction: dir };
+  const dir = idx.toId ? 'route' : (t.direction === 'auto' || t.direction == null ? (idx.stopId === 'UN' ? 0 : 1) : t.direction);
+  const short = (n) => (n ?? '').replace(/\s+GO( Centre)?$/, (m, c) => (c ? ' Centre' : ''));
+  return { stopId: idx.stopId, stopName: short(idx.stopName), toId: idx.toId, toName: idx.toId ? short(idx.toName) : null, departures, recent, live, liveError, direction: dir };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
-  const { loadConfig } = await import('./render.js');
+  const { loadConfig } = await import('./config.js');
   const config = loadConfig();
   if (args.includes('--stations')) {
     await ensureFeed();
     for (const s of listStations()) console.log(`${s.id.padEnd(5)} ${s.name}`);
   } else {
-    const i = args.indexOf('--stop'); if (i >= 0) config.transit = { ...config.transit, stop: args[i + 1] };
+    const get = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined; };
+    config.transit = { ...config.transit };
+    if (get('--from')) config.transit.from = get('--from');
+    if (get('--to')) config.transit.to = get('--to');
     const r = await getTransit(config);
-    console.log(`${r.stopName} (${r.stopId}) ${r.direction === 0 ? 'outbound' : r.direction === 1 ? 'to Union' : 'all'}${r.live ? ' [live]' : ''}${r.liveError ? ' live error: ' + r.liveError : ''}`);
-    for (const d of r.departures) console.log(`${d.hhmm}  ${d.line.padEnd(3)} ${d.dest.padEnd(26)} in ${d.inMin} min${d.platform ? '  pl ' + d.platform : ''}${d.status ? '  ' + d.status : ''}`);
+    const how = r.direction === 'route' ? `→ ${r.toName} (${r.toId})` : r.direction === 0 ? 'outbound' : r.direction === 1 ? 'to Union' : 'all';
+    console.log(`${r.stopName} (${r.stopId}) ${how}${r.live ? ' [live]' : ''}${r.liveError ? ' live error: ' + r.liveError : ''}`);
+    for (const d of r.departures) console.log(`${d.hhmm}  ${d.line.padEnd(3)} ${d.dest.padEnd(26)}${d.arrHm ? ' arr ' + d.arrHm + ' (' + d.mins + ' min)' : ''}  in ${d.inMin} min${d.platform ? '  pl ' + d.platform : ''}${d.status ? '  ' + d.status : ''}`);
   }
 }
