@@ -110,10 +110,23 @@ function readCsv(file) {
   });
 }
 
+// Everyday names for stations whose official GTFS name hides the town.
+const DISPLAY = {
+  'Durham College Oshawa': 'Oshawa',
+  'Brampton Innovation District': 'Brampton',
+  'Allandale Waterfront': 'Barrie Allandale',
+  'Hamilton GO Centre': 'Hamilton Centre',
+  'Pearson Airport Terminal 1': 'Pearson Airport',
+};
+export function displayName(stopName) {
+  const base = String(stopName ?? '').replace(/\s+GO( Centre)?$/, (m, c) => (c ? ' Centre' : '')).trim();
+  return DISPLAY[base] ?? base;
+}
+
 export function listStations() {
   return readCsv(path.join(FEED, 'stops.txt'))
     .filter((s) => !/\d/.test(s.stop_id))            // rail stations have letter codes
-    .map((s) => ({ id: s.stop_id, name: s.stop_name }))
+    .map((s) => ({ id: s.stop_id, name: displayName(s.stop_name), officialName: s.stop_name }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -231,7 +244,7 @@ const fmtTz = (epochSec, tz) => { const w = wallParts(epochSec, tz); return `${S
 
 // "LW - Aldershot GO" → "Aldershot"
 export function destination(headsign) {
-  return headsign.replace(/^[A-Z]{2,3}\s*-\s*/, '').replace(/\s+GO( Centre)?$/, (m, c) => (c ? ' Centre' : '')).trim();
+  return displayName(headsign.replace(/^[A-Z]{2,3}\s*-\s*/, ''));
 }
 
 export function nextDepartures(idx, config, now = new Date()) {
@@ -309,8 +322,7 @@ export async function getTransit(config, now = new Date()) {
     catch (e) { liveError = e.message; }
   }
   const dir = idx.toId ? 'route' : (t.direction === 'auto' || t.direction == null ? (idx.stopId === 'UN' ? 0 : 1) : t.direction);
-  const short = (n) => (n ?? '').replace(/\s+GO( Centre)?$/, (m, c) => (c ? ' Centre' : ''));
-  return { stopId: idx.stopId, stopName: short(idx.stopName), toId: idx.toId, toName: idx.toId ? short(idx.toName) : null, trip, back, departures, recent, noSchedule, live, liveError, direction: dir };
+  return { stopId: idx.stopId, stopName: displayName(idx.stopName), toId: idx.toId, toName: idx.toId ? displayName(idx.toName) : null, trip, back, departures, recent, noSchedule, live, liveError, direction: dir };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

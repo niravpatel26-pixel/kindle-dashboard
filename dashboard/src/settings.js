@@ -2,15 +2,14 @@
 // from a phone on the same Wi-Fi. Writes config.local.json; the Kindle sees the
 // change at its next refresh.
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const short = (n) => n.replace(/\s+GO( Centre)?$/, (m, c) => (c ? ' Centre' : ''));
 
 export function settingsPage({ cfg, stations, next, saved, error }) {
   const t = cfg.transit ?? {};
-  const byId = Object.fromEntries(stations.map((s) => [s.id, short(s.name)]));
+  const byId = Object.fromEntries(stations.map((s) => [s.id, s.name]));
   const from = (t.from ?? t.stop ?? 'UN').toUpperCase(), to = (t.to ?? '').toUpperCase();
   const trip = ['there', 'back', 'auto'].includes(t.trip) ? t.trip : 'there';
   const hasRoute = !!to && to !== from;
-  const opt = (sel) => stations.map((s) => `<option value="${s.id}" ${s.id === sel ? 'selected' : ''}>${esc(short(s.name))} (${s.id})</option>`).join('');
+  const opt = (sel) => stations.map((s) => `<option value="${s.id}" ${s.id === sel ? 'selected' : ''}>${esc(s.name)} (${s.id})</option>`).join('');
   const btn = (v, label, sub) => `<button name="trip" value="${v}" class="${trip === v ? 'on' : ''}" ${hasRoute ? '' : 'disabled'}>${label}<small>${esc(sub)}</small></button>`;
   const list = next?.departures?.length
     ? next.departures.map((d) => `<li><span><b>${esc(d.hhmmLive ?? d.hhmm)}</b> <span class="badge">${esc(d.line)}</span> ${d.arrHm ? `arrives ${esc(d.arrHm)} · ${d.mins} min` : esc(d.dest)}</span><em>${d.inMin <= 1 ? 'now' : `in ${d.inMin} min`}</em></li>`).join('')
