@@ -16,9 +16,10 @@ const PORT = Number(process.env.PORT || config.server?.port || 8080);
 const LIB_ROOTS = (config.library?.paths ?? ['../books']).map((p) => path.resolve(ROOT, p));
 const MIME = { '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff', '.png': 'image/png', '.html': 'text/html' };
 
-let stationCache = null;
+let stationCache = null, stationFeed = null;
 async function stations() {
-  if (!stationCache) { await ensureFeed(); stationCache = listStations(); }
+  const meta = await ensureFeed();
+  if (!stationCache || stationFeed !== meta.downloadedAt) { stationCache = listStations(); stationFeed = meta.downloadedAt; }
   return stationCache;
 }
 async function formBody(req) {
@@ -37,31 +38,39 @@ function enqueue(fn) {
   return run;
 }
 
+// Stream a regular file to the response. A directory, a vanished file or a
+// read error becomes a 404/500 instead of an uncaught stream error.
+function sendFile(res, file, type, extraHeaders = {}) {
+  let st;
+  try { st = fs.statSync(file); } catch { res.writeHead(404); return res.end('not found'); }
+  if (!st.isFile()) { res.writeHead(404); return res.end('not found'); }
+  const stream = fs.createReadStream(file);
+  stream.on('error', (e) => { if (!res.headersSent) res.writeHead(500); res.end(`read error: ${e.message}`); });
+  res.writeHead(200, { 'Content-Type': type, 'Content-Length': st.size, ...extraHeaders });
+  stream.pipe(res);
+}
+
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://localhost');
-  const battery = url.searchParams.get('battery');
   const t0 = Date.now();
+  let url, battery;
   try {
+    url = new URL(req.url, 'http://localhost');   // can throw on a malformed request target
+    battery = url.searchParams.get('battery');
     if (url.pathname === '/dashboard.png') {
       const { png, error } = await enqueue(() => renderPng({ battery }));
       res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length, 'Cache-Control': 'no-store' });
       res.end(png);
       log(req, 200, t0, error ? `weather error: ${error}` : `battery=${battery ?? '-'}`);
     } else if (url.pathname === '/' || url.pathname === '/dashboard.html') {
-      const { html } = await buildHtml({ battery });
+      const { html } = await enqueue(() => buildHtml({ battery }));   // shares out/dashboard.html with renders
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(html.replaceAll('../node_modules/', '/node_modules/'));
       log(req, 200, t0);
     } else if (url.pathname.startsWith('/node_modules/@fontsource/') && !url.pathname.includes('..')) {
       const file = path.join(ROOT, url.pathname);
-      if (!fs.existsSync(file)) { res.writeHead(404); return res.end(); }
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'max-age=86400' });
-      fs.createReadStream(file).pipe(res);
+      sendFile(res, file, MIME[path.extname(file)] ?? 'application/octet-stream', { 'Cache-Control': 'max-age=86400' });
     } else if (url.pathname === '/last.png') {
-      const file = path.join(OUT, 'dashboard.png');
-      if (!fs.existsSync(file)) { res.writeHead(404); return res.end('render first'); }
-      res.writeHead(200, { 'Content-Type': 'image/png' });
-      fs.createReadStream(file).pipe(res);
+      sendFile(res, path.join(OUT, 'dashboard.png'), 'image/png');
     } else if (url.pathname === '/settings' && req.method === 'GET') {
       const cfg = loadConfig();
       const st = await stations();
@@ -73,7 +82,8 @@ const server = http.createServer(async (req, res) => {
     } else if (url.pathname === '/toggle' && req.method === 'POST') {
       const trip = (await formBody(req)).get('trip');
       if (!['there', 'back', 'auto'].includes(trip)) { res.writeHead(400); return res.end('bad trip'); }
-      writeLocalConfig({ transit: { trip } });
+      try { writeLocalConfig({ transit: { trip } }); }
+      catch (e) { res.writeHead(303, { Location: '/settings?error=' + encodeURIComponent(e.message) }); return res.end(); }
       res.writeHead(303, { Location: '/settings?saved=1' }); res.end();
       log(req, 303, t0, `trip=${trip}`);
     } else if (url.pathname === '/settings' && req.method === 'POST') {
@@ -81,9 +91,10 @@ const server = http.createServer(async (req, res) => {
       const codes = new Set((await stations()).map((s) => s.id));
       const from = (b.get('from') ?? '').toUpperCase(), to = (b.get('to') ?? '').toUpperCase();
       if (!codes.has(from)) { res.writeHead(303, { Location: '/settings?error=' + encodeURIComponent('Unknown station: ' + from) }); return res.end(); }
-      const flipAt = /^\d{2}:\d{2}$/.test(b.get('flipAt') ?? '') ? b.get('flipAt') : '12:00';
+      const flipAt = /^([01]\d|2[0-3]):[0-5]\d$/.test(b.get('flipAt') ?? '') ? b.get('flipAt') : '12:00';
       const count = Math.min(6, Math.max(1, parseInt(b.get('count') ?? '4', 10) || 4));
-      writeLocalConfig({ transit: { from, to: codes.has(to) && to !== from ? to : '', flipAt, count } });
+      try { writeLocalConfig({ transit: { from, to: codes.has(to) && to !== from ? to : '', flipAt, count } }); }
+      catch (e) { res.writeHead(303, { Location: '/settings?error=' + encodeURIComponent(e.message) }); return res.end(); }
       res.writeHead(303, { Location: '/settings?saved=1' }); res.end();
       log(req, 303, t0, `route ${from}→${to || '-'}`);
     } else if (url.pathname === '/opds' || url.pathname === '/opds/') {
@@ -95,9 +106,7 @@ const server = http.createServer(async (req, res) => {
     } else if (url.pathname.startsWith('/books/')) {
       const book = resolveBook(LIB_ROOTS, decodeURIComponent(url.pathname.slice(7)));
       if (!book) { res.writeHead(404); return res.end('no such book'); }
-      const st = fs.statSync(book.file);
-      res.writeHead(200, { 'Content-Type': book.type, 'Content-Length': st.size, 'Content-Disposition': `attachment; filename="${encodeURIComponent(path.basename(book.file))}"` });
-      fs.createReadStream(book.file).pipe(res);
+      sendFile(res, book.file, book.type, { 'Content-Disposition': `attachment; filename="${encodeURIComponent(path.basename(book.file))}"` });
       log(req, 200, t0, path.basename(book.file));
     } else if (url.pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('ok');
@@ -105,11 +114,17 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(404); res.end('not found');
     }
   } catch (e) {
-    const status = /too large/.test(e.message) ? 413 : 500;
+    const status = /too large/.test(e.message) ? 413 : /ERR_INVALID_URL/.test(e.code ?? '') ? 400 : 500;
     log(req, status, t0, e.message);
-    res.writeHead(status, { 'Content-Type': 'text/plain' }); res.end(status === 413 ? 'request too large' : `error: ${e.message}`);
+    if (!res.headersSent) res.writeHead(status, { 'Content-Type': 'text/plain' });
+    res.end(status === 413 ? 'request too large' : status === 400 ? 'bad request' : `error: ${e.message}`);
   }
 });
+
+// This process runs unattended for weeks: log anything that slipped through
+// rather than exiting and leaving the Kindle with a stale image.
+process.on('unhandledRejection', (e) => console.error(`${new Date().toISOString()} unhandled rejection: ${e?.stack ?? e}`));
+process.on('uncaughtException', (e) => console.error(`${new Date().toISOString()} uncaught exception: ${e?.stack ?? e}`));
 
 function log(req, status, t0, extra = '') {
   console.log(`${new Date().toISOString()} ${status} ${req.method} ${req.url} ${Date.now() - t0}ms ${extra}`);

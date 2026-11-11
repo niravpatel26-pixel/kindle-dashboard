@@ -6,6 +6,7 @@
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$DIR/env.sh"
+[ -n "$TZ_SPEC" ] && export TZ="$TZ_SPEC"   # quiet hours are judged in this zone
 
 LOG="$DIR/logs/dash.log"
 PNG="$DIR/dash.png"
@@ -22,6 +23,7 @@ QUIET_START=$(num "$QUIET_START" -1); QUIET_END=$(num "$QUIET_END" 7)
 [ "$QUIET_END" -lt 0 ] && QUIET_END=0; [ "$QUIET_END" -gt 23 ] && QUIET_END=23
 FULL_REFRESH_EVERY=$(num "$FULL_REFRESH_EVERY" 6); [ "$FULL_REFRESH_EVERY" -lt 1 ] && FULL_REFRESH_EVERY=1
 WIFI_TIMEOUT=$(num "$WIFI_TIMEOUT" 45); [ "$WIFI_TIMEOUT" -lt 5 ] && WIFI_TIMEOUT=5
+FETCH_TIMEOUT=$(num "$FETCH_TIMEOUT" 90); [ "$FETCH_TIMEOUT" -lt 10 ] && FETCH_TIMEOUT=10
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 
@@ -47,12 +49,17 @@ wifi_off() {
   lipc-set-prop com.lab126.cmd wirelessEnable 0 >/dev/null 2>&1
 }
 
+# One request per cycle: wget is only used when curl is absent, never as a
+# retry, so a slow server is not hit twice.
 fetch() {
   url="$DASH_URL?battery=$(battery)&t=$(date +%s)"
   rm -f "$TMP"
-  if curl -s -f -m 60 -o "$TMP" "$url" 2>>"$LOG" || wget -q -T 60 -O "$TMP" "$url" 2>>"$LOG"; then
-    if [ -s "$TMP" ]; then mv "$TMP" "$PNG"; return 0; fi
+  if command -v curl >/dev/null 2>&1; then
+    curl -s -f -m "$FETCH_TIMEOUT" -o "$TMP" "$url" 2>>"$LOG"
+  else
+    wget -q -T "$FETCH_TIMEOUT" -O "$TMP" "$url" 2>>"$LOG"
   fi
+  if [ -s "$TMP" ]; then mv "$TMP" "$PNG"; return 0; fi
   rm -f "$TMP"
   return 1
 }
@@ -102,12 +109,24 @@ suspend_for() {
   sync
   t0=$(date +%s)
   if [ -w /sys/class/rtc/rtc0/wakealarm ]; then
-    echo 0 > /sys/class/rtc/rtc0/wakealarm
-    echo $(( t0 + secs )) > /sys/class/rtc/rtc0/wakealarm
-    echo mem > /sys/power/state 2>>"$LOG"
+    # Never suspend without a confirmed alarm: the device would sleep until a
+    # button press and the dashboard would silently stop.
+    echo 0 > /sys/class/rtc/rtc0/wakealarm 2>/dev/null
+    # the RTC may run ahead of or behind the system clock: set the alarm relative to the RTC's own time
+    rtcnow=$(cat /sys/class/rtc/rtc0/since_epoch 2>/dev/null); [ -z "$rtcnow" ] && rtcnow=$t0
+    if echo $(( rtcnow + secs )) > /sys/class/rtc/rtc0/wakealarm 2>>"$LOG" && [ "$(cat /sys/class/rtc/rtc0/wakealarm 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+      echo mem > /sys/power/state 2>>"$LOG"
+    else
+      log "could not arm the RTC alarm, sleeping instead of suspending"
+      sleep "$secs"; return
+    fi
   elif [ -w /sys/devices/platform/mxc_rtc.0/wakeup_enable ]; then
-    echo -n "$secs" > /sys/devices/platform/mxc_rtc.0/wakeup_enable
-    echo mem > /sys/power/state 2>>"$LOG"
+    if echo -n "$secs" > /sys/devices/platform/mxc_rtc.0/wakeup_enable 2>>"$LOG"; then
+      echo mem > /sys/power/state 2>>"$LOG"
+    else
+      log "could not arm the RTC alarm, sleeping instead of suspending"
+      sleep "$secs"; return
+    fi
   elif command -v rtcwake >/dev/null 2>&1; then
     rtcwake -m mem -s "$secs" >>"$LOG" 2>&1
   else

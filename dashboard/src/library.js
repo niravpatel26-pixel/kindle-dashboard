@@ -25,10 +25,12 @@ export function scanLibrary(roots) {
       for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
         if (ent.name.startsWith('.')) continue;
         const full = path.join(dir, ent.name);
-        if (ent.isDirectory()) { if (depth < 1) walk(full, depth + 1); continue; }
+        let st, real;
+        try { st = fs.statSync(full); real = fs.realpathSync(full); } catch { continue; }   // broken symlink etc.: skip just this entry
+        if (!real.startsWith(fs.realpathSync(root) + path.sep)) continue;                   // symlink leading outside the folder
+        if (st.isDirectory()) { if (depth < 1) walk(full, depth + 1); continue; }
         const ext = path.extname(ent.name).toLowerCase();
         if (!TYPES[ext]) continue;
-        const st = fs.statSync(full);
         books.push({
           id: `${ri}/${path.relative(root, full)}`,
           title: path.basename(ent.name, ext),
@@ -52,9 +54,10 @@ export function resolveBook(roots, id) {
   if (!m) return null;
   const root = roots[Number(m[1])];
   if (!root) return null;
-  const full = path.resolve(root, m[2]);
-  if (!full.startsWith(path.resolve(root) + path.sep)) return null;
-  if (!fs.existsSync(full) || !TYPES[path.extname(full).toLowerCase()]) return null;
+  let full, realRoot;
+  try { full = fs.realpathSync(path.resolve(root, m[2])); realRoot = fs.realpathSync(root); } catch { return null; }
+  if (!full.startsWith(realRoot + path.sep)) return null;      // a symlink pointing outside the folder is refused
+  if (!TYPES[path.extname(full).toLowerCase()]) return null;
   return { file: full, type: TYPES[path.extname(full).toLowerCase()] };
 }
 

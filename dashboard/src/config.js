@@ -16,12 +16,20 @@ function merge(a, b) {
 
 const LOCAL = path.join(ROOT, 'config.local.json');
 export function readLocalConfig() {
-  try { return JSON.parse(fs.readFileSync(LOCAL, 'utf8')); } catch { return {}; }
+  if (!fs.existsSync(LOCAL)) return {};
+  return JSON.parse(fs.readFileSync(LOCAL, 'utf8'));   // throws on a corrupt file: callers must not overwrite it
 }
 // Deep-merge a patch into config.local.json (the settings page uses this).
+// Written to a temp file and renamed, so a reader never sees a half-written
+// file and two quick writes cannot lose each other's keys.
 export function writeLocalConfig(patch) {
-  const next = merge(readLocalConfig(), patch);
-  fs.writeFileSync(LOCAL, JSON.stringify(next, null, 2) + '\n');
+  let current;
+  try { current = readLocalConfig(); }
+  catch (e) { throw new Error(`config.local.json is not valid JSON, fix it by hand first (${e.message})`); }
+  const next = merge(current, patch);
+  const tmp = `${LOCAL}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n');
+  fs.renameSync(tmp, LOCAL);
   return next;
 }
 
@@ -37,8 +45,8 @@ export function setOverrides(o) { overrides = o; }
 
 export function loadConfig() {
   let c = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
-  const local = path.join(ROOT, 'config.local.json');
-  if (fs.existsSync(local)) c = merge(c, JSON.parse(fs.readFileSync(local, 'utf8')));
+  try { c = merge(c, readLocalConfig()); }
+  catch (e) { console.error(`config.local.json ignored: ${e.message}`); }
   c.location = { ...c.location };
   c.location.timezone = validTimeZone(c.location.timezone);
   if (c.transit) c.transit.count = Math.min(8, Math.max(1, parseInt(c.transit.count, 10) || 4));

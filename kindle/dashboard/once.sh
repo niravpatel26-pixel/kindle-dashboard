@@ -5,7 +5,8 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$DIR/env.sh"
 url="$DASH_URL?battery=$(gasgauge-info -c 2>/dev/null | tr -dc '0-9')"
 echo "Fetching $url"
-if curl -s -f -m 60 -o "$DIR/dash.png" "$url" || wget -q -T 60 -O "$DIR/dash.png" "$url"; then
+if command -v curl >/dev/null 2>&1; then curl -s -f -m "${FETCH_TIMEOUT:-90}" -o "$DIR/dash.png" "$url"; else wget -q -T "${FETCH_TIMEOUT:-90}" -O "$DIR/dash.png" "$url"; fi
+if [ -s "$DIR/dash.png" ]; then
   echo "Got $(wc -c < "$DIR/dash.png") bytes. Showing for 20 s."
   sleep 2
   eips -f -g "$DIR/dash.png"

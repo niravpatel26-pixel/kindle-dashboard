@@ -24,12 +24,25 @@ export function ensureFeed() {
   if (!feedLock) feedLock = ensureFeedNow().finally(() => { feedLock = null; });
   return feedLock;
 }
+let refreshing = null;
 async function ensureFeedNow() {
   let meta = {};
   try { meta = JSON.parse(fs.readFileSync(META, 'utf8')); } catch { /* none yet */ }
   const have = fs.existsSync(path.join(FEED, 'stop_times.txt'));
   if (have && meta.checkedAt && Date.now() - meta.checkedAt < 24 * 3600 * 1000) return meta;
-  if (!have && meta.failedAt && Date.now() - meta.failedAt < 3600 * 1000) throw new Error(`GO schedule download failed recently (${meta.lastError}); retrying later`);
+  if (have) {
+    // A feed is on disk: answer from it now and refresh in the background, so a
+    // 10 MB download never holds up the Kindle's fetch.
+    if (!refreshing) refreshing = refreshFeed(meta, true).catch((e) => console.error(`GO feed refresh failed: ${e.message}`)).finally(() => { refreshing = null; });
+    return meta;
+  }
+  return refreshFeed(meta, false);
+}
+async function refreshFeed(meta, have) {
+  if (meta.failedAt && Date.now() - meta.failedAt < 3600 * 1000) {
+    if (have) return meta;
+    throw new Error(`GO schedule download failed recently (${meta.lastError}); retrying later`);
+  }
   fs.mkdirSync(OUT, { recursive: true });
   let etag = '';
   try {
@@ -170,8 +183,11 @@ export function routeOf(t = {}, now = new Date(), tz = 'UTC') {
   const trip = ['there', 'back', 'auto'].includes(t.trip) ? t.trip : 'there';
   let back = trip === 'back';
   if (trip === 'auto') {
-    const hm = new Intl.DateTimeFormat('en-CA', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).format(now).replace('24', '00');
-    back = hm >= (t.flipAt || '12:00');
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now).map((x) => [x.type, x.value]));
+    const nowMin = (Number(p.hour) % 24) * 60 + Number(p.minute);
+    const m = /^(\d{1,2}):(\d{2})$/.exec(t.flipAt || '');
+    const flipMin = m ? Math.min(23, +m[1]) * 60 + Math.min(59, +m[2]) : 12 * 60;
+    back = nowMin >= flipMin;
   }
   if (back) [from, to] = [to, from];
   return { from, to, trip, back };
@@ -192,6 +208,27 @@ function ymdOffset(ymd, days) {
 const hms = (s) => { const [h, m, sec] = s.split(':').map(Number); return h * 3600 + m * 60 + (sec || 0); };
 const fmtHm = (secs) => `${String(Math.floor((secs % 86400) / 3600)).padStart(2, '0')}:${String(Math.floor((secs % 3600) / 60)).padStart(2, '0')}`;
 
+// GTFS times count from "noon minus 12 hours" of the service day, which is
+// midnight except on the two clock-change days. Work in epoch seconds so a
+// 25-hour Sunday comes out right.
+function wallParts(epochSec, tz) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(epochSec * 1000)).map((x) => [x.type, x.value]));
+  return { y: +p.year, m: +p.month, d: +p.day, h: +p.hour % 24, min: +p.minute, s: +p.second };
+}
+export function serviceBase(ymd, tz) {
+  const y = +ymd.slice(0, 4), m = +ymd.slice(4, 6), d = +ymd.slice(6, 8);
+  const target = Date.UTC(y, m - 1, d, 12) / 1000;            // 12:00 on that date, as if UTC
+  let guess = target;
+  for (let i = 0; i < 3; i++) {                                 // converge on the instant that is 12:00 local
+    const w = wallParts(guess, tz);
+    guess += target - Date.UTC(w.y, w.m - 1, w.d, w.h, w.min, w.s) / 1000;
+  }
+  return guess - 12 * 3600;
+}
+const fmtTz = (epochSec, tz) => { const w = wallParts(epochSec, tz); return `${String(w.h).padStart(2, '0')}:${String(w.min).padStart(2, '0')}`; };
+
 // "LW - Aldershot GO" → "Aldershot"
 export function destination(headsign) {
   return headsign.replace(/^[A-Z]{2,3}\s*-\s*/, '').replace(/\s+GO( Centre)?$/, (m, c) => (c ? ' Centre' : '')).trim();
@@ -199,8 +236,11 @@ export function destination(headsign) {
 
 export function nextDepartures(idx, config, now = new Date()) {
   const t = config.transit ?? {};
-  const { ymd, secs } = localClock(now, config.location.timezone);
+  const tz = config.location.timezone;
+  const { ymd } = localClock(now, tz);
   const yday = ymdOffset(ymd, -1);
+  const nowSec = Math.floor(now.getTime() / 1000);
+  const bases = { [ymd]: serviceBase(ymd, tz), [yday]: serviceBase(yday, tz) };
   // With a destination the direction is implied by the route; otherwise auto = outbound at Union, inbound elsewhere.
   const wantDir = idx.toId ? 'all' : (t.direction === 'auto' || t.direction == null ? (idx.stopId === 'UN' ? 0 : 1) : t.direction);
   const lines = (t.lines ?? []).map((s) => String(s).toUpperCase());
@@ -211,13 +251,11 @@ export function nextDepartures(idx, config, now = new Date()) {
     if (t.railOnly !== false && d.type !== '2') continue;
     if (lines.length && !lines.includes(d.line)) continue;
     if (wantDir !== 'all' && d.dir !== Number(wantDir)) continue;
-    let dep = hms(d.time);
-    if (d.service === yday && dep >= 86400) dep -= 86400;   // after-midnight trip of yesterday's service
-    else if (d.service !== ymd) continue;
-    if (dep < secs - 8 * 60) continue;
-    let arrHm = null, mins = null;
-    if (d.arr) { let a = hms(d.arr); if (d.service === yday && a >= 86400) a -= 86400; arrHm = fmtHm(a); mins = Math.round((a - dep) / 60); }
-    out.push({ ...d, dest: destination(d.headsign), hhmm: fmtHm(dep), arrHm, mins, inMin: Math.round((dep - secs) / 60) });
+    if (!(d.service in bases)) continue;                      // only today's and yesterday's service days can still run
+    const dep = bases[d.service] + hms(d.time);
+    if (dep < nowSec - 8 * 60) continue;
+    const arr = d.arr ? bases[d.service] + hms(d.arr) : null;
+    out.push({ ...d, dest: destination(d.headsign), hhmm: fmtTz(dep, tz), arrHm: arr ? fmtTz(arr, tz) : null, mins: arr ? Math.round((arr - dep) / 60) : null, inMin: Math.round((dep - nowSec) / 60), epoch: dep });
   }
   out.sort((a, b) => a.inMin - b.inMin);
   const upcoming = out.filter((d) => d.inMin >= -1);
@@ -247,10 +285,14 @@ function overlay(departures, lines) {
     if (!hit) continue;
     d.platform = hit.ActualPlatform || hit.ScheduledPlatform || '';
     d.status = hit.DepartureStatus || hit.Status || '';
+    // Time format of the live API is undocumented; we only rely on an HH:MM inside it.
     const comp = String(hit.ComputedDepartureTime ?? '').match(/(\d{2}):(\d{2})/);
     if (comp) {
       const c = +comp[1] * 3600 + +comp[2] * 60, s = hms(d.hhmm + ':00');
-      d.delayMin = Math.round((c - s) / 60);
+      let delta = c - s;
+      if (delta < -12 * 3600) delta += 86400;                 // computed time rolled past midnight
+      if (delta > 12 * 3600) delta -= 86400;
+      d.delayMin = Math.round(delta / 60);
       if (d.delayMin > 0) d.hhmmLive = fmtHm(c);
     }
   }

@@ -32,7 +32,7 @@ export function renderHtml({ config, device, weather, transit, battery, now, err
     body = [
       renderNow(weather, config, fmt),
       renderHourly(weather, config, fmt, now),
-      showTransit ? renderTransit(transit, config, device.landscape ? undefined : 3) : '',
+      showTransit ? renderTransit(transit, config, device.landscape ? 4 : 3) : '',
       renderDaily(weather, config, fmt, now, maxDays),
     ].join('\n');
   }

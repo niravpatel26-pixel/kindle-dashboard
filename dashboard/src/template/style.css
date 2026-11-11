@@ -100,8 +100,9 @@ body {
 
 /* ---- GO trains ---- */
 .transit { border-top: 0.4vmin solid var(--rule); padding-top: 1.8vmin; }
-.transit .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.8vmin; }
-.transit .title { font-weight: 600; font-size: 2.6vmin; }
+.transit .head { display: flex; justify-content: space-between; align-items: baseline; gap: 2vmin; margin-bottom: 0.8vmin; }
+.transit .title { font-weight: 600; font-size: 2.6vmin; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.transit .sub { flex: none; }
 .transit .title .icon { width: 1.1em; height: 1.1em; vertical-align: -0.2em; margin-right: 0.3em; }
 .transit .sub { color: var(--ink-3); font-size: 2vmin; letter-spacing: 0.03em; }
 .transit .strip { display: block; width: 100%; height: auto; margin: 0.4vmin 0 0.6vmin; }
