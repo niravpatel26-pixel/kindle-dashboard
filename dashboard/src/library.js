@@ -40,7 +40,7 @@ export function scanLibrary(roots) {
         });
       }
     };
-    walk(root, 0);
+    try { walk(root, 0); } catch (e) { console.error(`library: cannot read ${root}: ${e.message}`); }
   });
   books.sort((a, b) => b.mtime - a.mtime);
   return books;

@@ -66,19 +66,31 @@ function buildUrl({ latitude, longitude, timezone }, units) {
   return `https://api.open-meteo.com/v1/forecast?${p}`;
 }
 
+// Returns the forecast with a `fetchedAt` timestamp. When Open-Meteo is
+// unreachable the last successful answer is returned instead (any age), so a
+// network blip never blanks the dashboard; the page shows how old it is.
 export async function getWeather(config) {
   const maxAge = (config.cache?.weatherMinutes ?? 10) * 60 * 1000;
+  let cached = null;
   try {
     const c = JSON.parse(fs.readFileSync(CACHE, 'utf8'));
-    if (Date.now() - c.fetchedAt < maxAge && c.key === cacheKey(config)) return c.data;
+    if (c.key === cacheKey(config)) cached = c;
   } catch { /* no cache */ }
+  if (cached && Date.now() - cached.fetchedAt < maxAge) return { ...cached.data, fetchedAt: cached.fetchedAt };
 
-  const res = await fetch(buildUrl(config.location, config.units), { signal: AbortSignal.timeout(20000) });
-  if (!res.ok) throw new Error(`Open-Meteo ${res.status}`);
-  const data = await res.json();
-  fs.mkdirSync(OUT, { recursive: true });
-  fs.writeFileSync(CACHE, JSON.stringify({ fetchedAt: Date.now(), key: cacheKey(config), data }));
-  return data;
+  try {
+    const res = await fetch(buildUrl(config.location, config.units), { signal: AbortSignal.timeout(20000) });
+    if (!res.ok) throw new Error(`Open-Meteo ${res.status}`);
+    const data = await res.json();
+    if (!data?.current || !data?.hourly?.time?.length || !data?.daily?.time?.length) throw new Error('Open-Meteo: unexpected response');
+    const fetchedAt = Date.now();
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.writeFileSync(CACHE, JSON.stringify({ fetchedAt, key: cacheKey(config), data }));
+    return { ...data, fetchedAt };
+  } catch (e) {
+    if (cached) return { ...cached.data, fetchedAt: cached.fetchedAt, stale: e.message };
+    throw e;
+  }
 }
 
 function cacheKey(c) {

@@ -41,19 +41,25 @@ export async function buildHtml({ battery } = {}) {
 
 export async function renderPng({ battery, outFile = 'dashboard.png' } = {}) {
   const { device, config, error } = await buildHtml({ battery });
-  const page = await (await getBrowser()).newPage({
-    viewport: { width: device.pageWidth, height: device.pageHeight },
-    deviceScaleFactor: 1,
-  });
+  let page;
   try {
-    await page.goto('file://' + path.join(OUT, 'dashboard.html'));
+    page = await (await getBrowser()).newPage({
+      viewport: { width: device.pageWidth, height: device.pageHeight },
+      deviceScaleFactor: 1,
+    });
+    await page.goto('file://' + path.join(OUT, 'dashboard.html'), { timeout: 30000 });
     await page.evaluate(() => document.fonts.ready);
-    const shot = await page.screenshot({ type: 'png' });
+    const shot = await page.screenshot({ type: 'png', timeout: 30000 });
     const png = toKindlePng(shot, { rotate: device.rotate, gamma: config.device.gamma ?? 1 });
     fs.writeFileSync(path.join(OUT, outFile), png);
     return { png, device, error };
+  } catch (e) {
+    // A crashed or hung Chromium would otherwise poison every later render:
+    // drop it so the next request launches a fresh one.
+    await closeBrowser().catch(() => {});
+    throw e;
   } finally {
-    await page.close();
+    if (page) await page.close().catch(() => {});
   }
 }
 

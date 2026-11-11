@@ -16,11 +16,20 @@ const META = path.join(OUT, 'go-gtfs.meta.json');
 const execFileP = promisify(execFile);
 
 // ---------- feed download (checked daily, re-downloaded when the ETag changes) ----------
-export async function ensureFeed() {
+// One download at a time: a render and the settings page can both ask for the
+// feed in the same second, and a failed download is not retried for an hour.
+const memo = new Map();
+let feedLock = null;
+export function ensureFeed() {
+  if (!feedLock) feedLock = ensureFeedNow().finally(() => { feedLock = null; });
+  return feedLock;
+}
+async function ensureFeedNow() {
   let meta = {};
   try { meta = JSON.parse(fs.readFileSync(META, 'utf8')); } catch { /* none yet */ }
   const have = fs.existsSync(path.join(FEED, 'stop_times.txt'));
   if (have && meta.checkedAt && Date.now() - meta.checkedAt < 24 * 3600 * 1000) return meta;
+  if (!have && meta.failedAt && Date.now() - meta.failedAt < 3600 * 1000) throw new Error(`GO schedule download failed recently (${meta.lastError}); retrying later`);
   fs.mkdirSync(OUT, { recursive: true });
   let etag = '';
   try {
@@ -35,20 +44,32 @@ export async function ensureFeed() {
     fs.writeFileSync(META, JSON.stringify(meta));
     return meta;
   }
-  const res = await fetch(GTFS_URL, { signal: AbortSignal.timeout(180000) });
-  if (!res.ok) throw new Error(`GTFS download ${res.status}`);
-  fs.writeFileSync(ZIP, Buffer.from(await res.arrayBuffer()));
-  fs.rmSync(FEED, { recursive: true, force: true });
-  fs.mkdirSync(FEED, { recursive: true });
   try {
-    await execFileP('unzip', ['-o', '-q', ZIP, '-d', FEED]);
+    const res = await fetch(GTFS_URL, { signal: AbortSignal.timeout(180000) });
+    if (!res.ok) throw new Error(`GTFS download ${res.status}`);
+    fs.writeFileSync(ZIP, Buffer.from(await res.arrayBuffer()));
+    // unzip into a fresh folder, then swap it in, so a half-extracted feed is never read
+    const tmp = FEED + '.new';
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.mkdirSync(tmp, { recursive: true });
+    try {
+      await execFileP('unzip', ['-o', '-q', ZIP, '-d', tmp]);
+    } catch (e) {
+      throw new Error(`could not unzip GTFS (is "unzip" installed?): ${e.message}`);
+    }
+    if (!fs.existsSync(path.join(tmp, 'stop_times.txt'))) throw new Error('GTFS zip has no stop_times.txt');
+    fs.rmSync(FEED, { recursive: true, force: true });
+    fs.renameSync(tmp, FEED);
+    for (const f of fs.readdirSync(OUT)) if (/^transit-.*\.json$/.test(f)) fs.rmSync(path.join(OUT, f));
+    memo.clear();
+    meta = { etag, checkedAt: Date.now(), downloadedAt: Date.now() };
+    fs.writeFileSync(META, JSON.stringify(meta));
+    return meta;
   } catch (e) {
-    throw new Error(`could not unzip GTFS (is "unzip" installed?): ${e.message}`);
+    fs.writeFileSync(META, JSON.stringify({ ...meta, failedAt: Date.now(), lastError: e.message }));
+    if (have) return meta;           // keep serving the feed we have
+    throw e;
   }
-  for (const f of fs.readdirSync(OUT)) if (/^transit-.*\.json$/.test(f)) fs.rmSync(path.join(OUT, f));
-  meta = { etag, checkedAt: Date.now(), downloadedAt: Date.now() };
-  fs.writeFileSync(META, JSON.stringify(meta));
-  return meta;
 }
 
 // ---------- CSV ----------
@@ -129,7 +150,6 @@ async function buildIndex(fromId, toId) {
   return idx;
 }
 
-const memo = new Map();
 async function getIndex(fromId, toId) {
   await ensureFeed();
   const key = `${fromId}${toId ? '-' + toId : ''}`;
@@ -185,7 +205,9 @@ export function nextDepartures(idx, config, now = new Date()) {
   const wantDir = idx.toId ? 'all' : (t.direction === 'auto' || t.direction == null ? (idx.stopId === 'UN' ? 0 : 1) : t.direction);
   const lines = (t.lines ?? []).map((s) => String(s).toUpperCase());
   const out = [];
+  let anyToday = false;
   for (const d of idx.departures) {
+    if (d.service === ymd) anyToday = true;
     if (t.railOnly !== false && d.type !== '2') continue;
     if (lines.length && !lines.includes(d.line)) continue;
     if (wantDir !== 'all' && d.dir !== Number(wantDir)) continue;
@@ -200,7 +222,11 @@ export function nextDepartures(idx, config, now = new Date()) {
   out.sort((a, b) => a.inMin - b.inMin);
   const upcoming = out.filter((d) => d.inMin >= -1);
   const gone = out.filter((d) => d.inMin < -1);
-  return { departures: upcoming.slice(0, t.count ?? 4), recent: gone.length ? gone[gone.length - 1] : null };
+  const count = Math.max(1, parseInt(t.count, 10) || 4);
+  // The feed only covers a window of dates; outside it (or before a new feed
+  // is published) there is no schedule at all, which is different from "no more trains".
+  const noSchedule = !anyToday ? 'No schedule for today yet' : null;
+  return { departures: upcoming.slice(0, count), recent: gone.length ? gone[gone.length - 1] : null, noSchedule };
 }
 
 // ---------- optional real-time overlay (Metrolinx Open Data API) ----------
@@ -234,7 +260,7 @@ export async function getTransit(config, now = new Date()) {
   const t = config.transit ?? {};
   const { from, to, trip, back } = routeOf(t, now, config.location.timezone);
   const idx = await getIndex(from, to);
-  const { departures, recent } = nextDepartures(idx, config, now);
+  const { departures, recent, noSchedule } = nextDepartures(idx, config, now);
   let live = false, liveError = null;
   if (t.metrolinxKey) {
     try { overlay(departures, await realtime(idx.stopId, t.metrolinxKey)); live = true; }
@@ -242,7 +268,7 @@ export async function getTransit(config, now = new Date()) {
   }
   const dir = idx.toId ? 'route' : (t.direction === 'auto' || t.direction == null ? (idx.stopId === 'UN' ? 0 : 1) : t.direction);
   const short = (n) => (n ?? '').replace(/\s+GO( Centre)?$/, (m, c) => (c ? ' Centre' : ''));
-  return { stopId: idx.stopId, stopName: short(idx.stopName), toId: idx.toId, toName: idx.toId ? short(idx.toName) : null, trip, back, departures, recent, live, liveError, direction: dir };
+  return { stopId: idx.stopId, stopName: short(idx.stopName), toId: idx.toId, toName: idx.toId ? short(idx.toName) : null, trip, back, departures, recent, noSchedule, live, liveError, direction: dir };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

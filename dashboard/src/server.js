@@ -22,12 +22,20 @@ async function stations() {
   return stationCache;
 }
 async function formBody(req) {
-  let b = ''; for await (const chunk of req) b += chunk;
+  let b = '';
+  for await (const chunk of req) { b += chunk; if (b.length > 65536) throw new Error('form body too large'); }
   return new URLSearchParams(b);
 }
 
-let queue = Promise.resolve(); // renders run one at a time
-const enqueue = (fn) => (queue = queue.then(fn, fn));
+// Renders run one at a time. The chain itself always settles, so a failed
+// render is reported to its own request and can never become an unhandled
+// rejection that takes the server down.
+let queue = Promise.resolve();
+function enqueue(fn) {
+  const run = queue.then(fn, fn);
+  queue = run.catch(() => {});
+  return run;
+}
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -80,7 +88,7 @@ const server = http.createServer(async (req, res) => {
       log(req, 303, t0, `route ${from}→${to || '-'}`);
     } else if (url.pathname === '/opds' || url.pathname === '/opds/') {
       const books = scanLibrary(LIB_ROOTS);
-      const baseUrl = `http://${req.headers.host}`;
+      const baseUrl = `http://${req.headers.host || `localhost:${PORT}`}`;
       res.writeHead(200, { 'Content-Type': 'application/atom+xml;profile=opds-catalog;kind=acquisition; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(opdsFeed(books, { title: config.library?.title ?? 'Mac library', baseUrl }));
       log(req, 200, t0, `${books.length} books`);
@@ -97,8 +105,9 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(404); res.end('not found');
     }
   } catch (e) {
-    log(req, 500, t0, e.message);
-    res.writeHead(500, { 'Content-Type': 'text/plain' }); res.end(`render failed: ${e.message}`);
+    const status = /too large/.test(e.message) ? 413 : 500;
+    log(req, status, t0, e.message);
+    res.writeHead(status, { 'Content-Type': 'text/plain' }); res.end(status === 413 ? 'request too large' : `error: ${e.message}`);
   }
 });
 

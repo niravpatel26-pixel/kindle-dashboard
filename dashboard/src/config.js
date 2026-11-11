@@ -25,6 +25,13 @@ export function writeLocalConfig(patch) {
   return next;
 }
 
+// An invalid IANA name (e.g. "auto") would make every Intl call throw and
+// take the whole render down, so fall back to the machine's zone.
+export function validTimeZone(tz) {
+  try { new Intl.DateTimeFormat('en', { timeZone: tz }); return tz; }
+  catch { return Intl.DateTimeFormat().resolvedOptions().timeZone; }
+}
+
 let overrides = {};
 export function setOverrides(o) { overrides = o; }
 
@@ -32,6 +39,9 @@ export function loadConfig() {
   let c = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
   const local = path.join(ROOT, 'config.local.json');
   if (fs.existsSync(local)) c = merge(c, JSON.parse(fs.readFileSync(local, 'utf8')));
+  c.location = { ...c.location };
+  c.location.timezone = validTimeZone(c.location.timezone);
+  if (c.transit) c.transit.count = Math.min(8, Math.max(1, parseInt(c.transit.count, 10) || 4));
   c.device = { ...c.device, ...overrides.device };
   if (overrides.clock) c.clock = { ...c.clock, ...overrides.clock };
   if (overrides.transit) c.transit = { ...c.transit, ...overrides.transit };

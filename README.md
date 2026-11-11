@@ -148,6 +148,20 @@ Wi-Fi on → fetch → `eips` the PNG → Wi-Fi off → RTC alarm → suspend to
 During quiet hours (default 23:00–07:00) it suspends straight through. A full
 flashing refresh every 6th update clears ghosting. Logs: `/mnt/us/dashboard/logs/dash.log`.
 
+## When things go wrong
+
+- **Open-Meteo unreachable**: the last good forecast is used and the header
+  says "Weather as of HH:MM" once it is older than 20 minutes.
+- **GO schedule unreachable**: the feed already on disk keeps being used; a
+  failed download is not retried for an hour. Outside the feed's date window
+  the panel says "No schedule for today yet".
+- **Server unreachable from the Kindle**: the last image stays on screen; after
+  three failed fetches in a row the Kindle waits three times longer between
+  tries to save battery.
+- **Chromium crashes**: the next request launches a fresh one.
+- **Bad values in config**: an invalid timezone falls back to the machine's;
+  non-numeric values in `env.sh` fall back to defaults instead of crashing the loop.
+
 ## Credits and licences
 
 - Code: MIT (see LICENSE).

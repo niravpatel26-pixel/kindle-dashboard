@@ -52,6 +52,11 @@ export function renderHtml({ config, device, weather, transit, battery, now, err
   const m = timeStr.match(/^(\d{1,2}:\d{2})\s*(.+)$/);
   if (hour12 && m) clock = `${m[1]}<small>${esc(m[2])}</small>`;
 
+  // Weather older than 20 minutes (Open-Meteo unreachable) gets an "as of" note.
+  let staleNote = '';
+  if (weather?.fetchedAt && now - weather.fetchedAt > 20 * 60 * 1000) {
+    staleNote = `<span class="updated">Weather as of ${esc(fmt({ hour: '2-digit', minute: '2-digit', hour12 }).format(new Date(weather.fetchedAt)))}</span>`;
+  }
   const batt = battery != null && battery !== '' && !Number.isNaN(+battery)
     ? `<span class="battery">${batteryIcon(+battery)} ${Math.round(+battery)}%</span>` : '';
 
@@ -71,7 +76,7 @@ export function renderHtml({ config, device, weather, transit, battery, now, err
 <main class="page ${showClock ? '' : 'no-clock'} ${showTransit ? 'has-transit' : ''}" style="--rows: ${rows}">
   <header class="top">
     <div class="date">${esc(dateStr)}</div>
-    <div class="meta"><span class="place">${esc(config.location.name ?? '')}</span>${showClock ? '' : `<span class="updated">Updated ${esc(timeStr)}</span>`}${batt}</div>
+    <div class="meta"><span class="place">${esc(config.location.name ?? '')}</span>${staleNote}${showClock ? '' : `<span class="updated">Updated ${esc(timeStr)}</span>`}${batt}</div>
   </header>
   <section class="clock num">${clock}${frog}</section>
   ${body}
@@ -84,7 +89,7 @@ function renderNow(w, config, fmt) {
   const c = w.current, d = w.daily;
   const { icon: ic, label } = describe(c.weather_code, c.is_day === 1);
   const windUnit = config.units.wind === 'mph' ? 'mph' : 'km/h';
-  const hhmm = (iso) => fmt({ hour: '2-digit', minute: '2-digit', hour12: !!config.clock?.hour12 }).format(new Date(iso));
+  const hhmm = (iso) => { const t = String(iso).slice(11, 16); return config.clock?.hour12 ? to12(t) : t; };
   const popToday = d.precipitation_probability_max?.[0] ?? 0;
   const mmToday = d.precipitation_sum?.[0] ?? 0;
   return `
@@ -188,7 +193,7 @@ function renderTransit(tr, config, maxTrains) {
   const live = tr.live ? ' · live' : '';
   let rows;
   if (tr.error) rows = `<div class="train none">${esc(tr.error)}</div>`;
-  else if (!tr.departures.length) rows = `<div class="train none">No more trains today</div>`;
+  else if (!tr.departures.length) rows = `<div class="train none">${esc(tr.noSchedule ?? 'No more trains today')}</div>`;
   else rows = tr.departures.slice(0, maxTrains ?? tr.departures.length).map((d) => {
     const late = d.delayMin > 0;
     const status = late ? `+${d.delayMin} min` : d.status ? d.status : d.inMin <= 1 ? 'now' : `in ${d.inMin} min`;
@@ -214,9 +219,9 @@ function renderDaily(w, config, fmt, now, maxDays) {
   const min = Math.min(...lows), max = Math.max(...highs), span = Math.max(1, max - min);
   const rows = [];
   for (let i = 0; i < days; i++) {
-    const date = new Date(d.time[i] + 'T12:00:00');
-    const wd = fmt({ weekday: 'short' }).format(date);
-    const dn = fmt({ day: 'numeric' }).format(date);
+    const date = new Date(d.time[i] + 'T00:00:00Z');
+    const wd = new Intl.DateTimeFormat(config.locale || 'en', { timeZone: 'UTC', weekday: 'short' }).format(date);
+    const dn = new Intl.DateTimeFormat(config.locale || 'en', { timeZone: 'UTC', day: 'numeric' }).format(date);
     const { icon: ic } = describe(d.weather_code[i], true);
     const pop = d.precipitation_probability_max?.[i] ?? 0;
     const mm = d.precipitation_sum?.[i] ?? 0;

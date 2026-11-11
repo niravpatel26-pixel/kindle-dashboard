@@ -4,8 +4,9 @@
 # curl is too old for modern TLS). The loop appends ?battery=NN itself.
 DASH_URL="http://192.168.1.10:8080/dashboard.png"
 
-# Minutes between refreshes during the day. Every refresh = ~20-40 s of Wi-Fi.
-# 10 min ≈ a week or two of battery; 60 min ≈ a month.
+# Minutes between refreshes during the day (whole number). Every refresh =
+# ~20-40 s of Wi-Fi. 10 min ≈ a week or two of battery; 60 min ≈ a month.
+# After three failed fetches in a row the loop waits three times as long.
 REFRESH_MINUTES=10
 
 # Quiet hours (24h clock): no Wi-Fi, no refresh, last image stays on screen.

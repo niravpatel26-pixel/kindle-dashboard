@@ -12,14 +12,14 @@ for f in "$VOL"/update*.bin "$VOL"/update.bin.tmp.partial; do
   [ -e "$f" ] && { echo "Deleting pending update file: $f"; rm -f "$f"; }
 done
 mkdir -p "$VOL/fill_disk"
-free_mb() { df -m "$VOL" | awk 'NR==2 {print $4}'; }
+free_mb() { df -Pm "$VOL" | awk 'NR==2 {print $4}'; }
 i=0
 echo "Free before: $(free_mb) MB"
 # Big chunks first (FAT32 max is 4 GB per file), then 100 MB, then 10 MB steps.
 for size in 1000 100 10; do
   while [ "$(free_mb)" -gt $((LEAVE_MB + size)) ]; do
     i=$((i + 1))
-    dd if=/dev/zero of="$VOL/fill_disk/fill_$i.bin" bs=1m count="$size" status=none
+    dd if=/dev/zero of="$VOL/fill_disk/fill_$i.bin" bs=1048576 count="$size" 2>/dev/null || { echo "Write failed (disk full?). Stopping."; break; }
   done
 done
 sync

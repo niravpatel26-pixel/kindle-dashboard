@@ -13,9 +13,23 @@ TMP="$DIR/dash.tmp"
 mkdir -p "$DIR/logs"
 echo $$ > "$DIR/dash.pid"
 
+# Settings from env.sh must be whole numbers; fall back to sane values rather
+# than crashing the loop on an arithmetic error at 3 a.m.
+num() { case "$1" in ''|*[!0-9-]*) echo "$2" ;; *) echo "$1" ;; esac; }
+REFRESH_MINUTES=$(num "$REFRESH_MINUTES" 10); [ "$REFRESH_MINUTES" -lt 1 ] && REFRESH_MINUTES=1
+QUIET_START=$(num "$QUIET_START" -1); QUIET_END=$(num "$QUIET_END" 7)
+[ "$QUIET_START" -gt 23 ] && QUIET_START=-1
+[ "$QUIET_END" -lt 0 ] && QUIET_END=0; [ "$QUIET_END" -gt 23 ] && QUIET_END=23
+FULL_REFRESH_EVERY=$(num "$FULL_REFRESH_EVERY" 6); [ "$FULL_REFRESH_EVERY" -lt 1 ] && FULL_REFRESH_EVERY=1
+WIFI_TIMEOUT=$(num "$WIFI_TIMEOUT" 45); [ "$WIFI_TIMEOUT" -lt 5 ] && WIFI_TIMEOUT=5
+
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 
-battery() { gasgauge-info -c 2>/dev/null | tr -dc '0-9'; }
+battery() {
+  b=$(gasgauge-info -c 2>/dev/null | tr -dc '0-9')
+  [ -z "$b" ] && b=$(cat /sys/class/power_supply/*/capacity 2>/dev/null | head -1 | tr -dc '0-9')
+  echo "$b"
+}
 
 wifi_on() {
   lipc-set-prop com.lab126.cmd wirelessEnable 1 >/dev/null 2>&1
@@ -43,9 +57,14 @@ fetch() {
   return 1
 }
 
+# eips is on every Kindle; fbink comes with the modern jailbreak toolkit.
 show() {
-  if [ "$1" = "full" ]; then eips -f -g "$PNG" >/dev/null 2>&1
-  else eips -g "$PNG" >/dev/null 2>&1
+  if command -v eips >/dev/null 2>&1; then
+    if [ "$1" = "full" ]; then eips -f -g "$PNG" >/dev/null 2>&1; else eips -g "$PNG" >/dev/null 2>&1; fi
+  elif command -v fbink >/dev/null 2>&1; then
+    if [ "$1" = "full" ]; then fbink -q -f -g file="$PNG" >/dev/null 2>&1; else fbink -q -g file="$PNG" >/dev/null 2>&1; fi
+  else
+    log "neither eips nor fbink found; cannot draw"
   fi
 }
 
@@ -77,6 +96,8 @@ suspend_for() {
   secs=$1
   [ "$secs" -lt 20 ] && secs=20
   if [ "$DEBUG" = "1" ]; then log "debug sleep ${secs}s"; sleep "$secs"; return; fi
+  # never sleep through the start of quiet hours or past a day boundary by more than needed
+  [ "$secs" -gt 43200 ] && secs=43200
   log "suspend ${secs}s"
   sync
   t0=$(date +%s)
@@ -112,6 +133,7 @@ init() {
 }
 
 n=0
+fails=0
 init
 while true; do
   if in_quiet_hours; then
@@ -124,14 +146,19 @@ while true; do
     if fetch; then
       if [ $((n % FULL_REFRESH_EVERY)) -eq 0 ]; then show full; else show; fi
       n=$((n + 1))
+      fails=0
       log "updated, battery $(battery)%"
     else
-      log "fetch failed: $DASH_URL"
+      fails=$((fails + 1))
+      log "fetch failed ($fails in a row): $DASH_URL"
     fi
   else
     log "wifi not connected after ${WIFI_TIMEOUT}s"
   fi
   wifi_off
   sleep 2
-  suspend_for $((REFRESH_MINUTES * 60))
+  # back off while the server is unreachable (e.g. the Mac is asleep) to save battery
+  wait=$((REFRESH_MINUTES * 60))
+  [ "$fails" -ge 3 ] && wait=$((wait * 3))
+  suspend_for "$wait"
 done
