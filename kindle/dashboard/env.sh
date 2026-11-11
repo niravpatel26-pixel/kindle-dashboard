@@ -20,6 +20,10 @@ QUIET_END=7
 #   Central: CST6CDT,M3.2.0,M11.1.0   UK: GMT0BST,M3.5.0/1,M10.5.0   CET: CET-1CEST,M3.5.0,M10.5.0/3
 TZ_SPEC="EST5EDT,M3.2.0,M11.1.0"
 
+# 1 = let the server shorten the wait while a train is close (2 min within
+# 15 min of departure, 5 min within 45, else REFRESH_MINUTES). 0 = fixed.
+ADAPTIVE=1
+
 # Do a full flashing refresh every N updates to clear e-ink ghosting.
 FULL_REFRESH_EVERY=6
 

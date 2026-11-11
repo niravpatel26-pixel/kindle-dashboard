@@ -50,15 +50,20 @@ wifi_off() {
 }
 
 # One request per cycle: wget is only used when curl is absent, never as a
-# retry, so a slow server is not hit twice.
+# retry, so a slow server is not hit twice. The server answers with an
+# X-Refresh-Seconds header saying how soon to come back (short while a train
+# is close, long otherwise); NEXT_WAIT carries it to the main loop.
+HDR="$DIR/dash.hdr"
+NEXT_WAIT=""
 fetch() {
   url="$DASH_URL?battery=$(battery)&t=$(date +%s)"
-  rm -f "$TMP"
+  rm -f "$TMP" "$HDR"
   if command -v curl >/dev/null 2>&1; then
-    curl -s -f -m "$FETCH_TIMEOUT" -o "$TMP" "$url" 2>>"$LOG"
+    curl -s -f -m "$FETCH_TIMEOUT" -D "$HDR" -o "$TMP" "$url" 2>>"$LOG"
   else
-    wget -q -T "$FETCH_TIMEOUT" -O "$TMP" "$url" 2>>"$LOG"
+    wget -q -T "$FETCH_TIMEOUT" -S -O "$TMP" "$url" 2>"$HDR"
   fi
+  NEXT_WAIT=$(tr -d '\r' < "$HDR" 2>/dev/null | sed -n 's/^.*[Xx]-[Rr]efresh-[Ss]econds: *\([0-9]*\).*$/\1/p' | head -1)
   if [ -s "$TMP" ]; then mv "$TMP" "$PNG"; return 0; fi
   rm -f "$TMP"
   return 1
@@ -176,8 +181,12 @@ while true; do
   fi
   wifi_off
   sleep 2
-  # back off while the server is unreachable (e.g. the Mac is asleep) to save battery
+  # the server's hint wins when ADAPTIVE=1 and it is sane; otherwise the fixed interval
   wait=$((REFRESH_MINUTES * 60))
-  [ "$fails" -ge 3 ] && wait=$((wait * 3))
+  if [ "$ADAPTIVE" != "0" ] && [ -n "$NEXT_WAIT" ] && [ "$NEXT_WAIT" -ge 60 ] 2>/dev/null && [ "$NEXT_WAIT" -le 3600 ] 2>/dev/null; then
+    wait=$NEXT_WAIT
+  fi
+  # back off while the server is unreachable (e.g. the Mac is asleep) to save battery
+  [ "$fails" -ge 3 ] && wait=$((REFRESH_MINUTES * 60 * 3))
   suspend_for "$wait"
 done

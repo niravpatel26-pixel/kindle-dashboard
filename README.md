@@ -57,6 +57,7 @@ is git-ignored; `config.json` holds the shipped defaults). Keys:
 | `transit.lines` | e.g. `["LW","LE"]` to filter; empty = all rail lines |
 | `transit.metrolinxKey` | optional: a free Metrolinx Open Data key adds platforms and delays |
 | `library.paths` | folders of EPUBs/PDFs published to KOReader as an OPDS catalogue |
+| `refresh.*` | how long the Kindle sleeps depending on how close the next train is (see below) |
 
 Render once to check it:
 
@@ -99,6 +100,24 @@ https://api.openmetrolinx.com/OpenDataAPI/Help/Registration/en . Paste it into
 ```bash
 cd dashboard && node src/transit.js --from OA --to UN --trip auto
 ```
+
+### Refresh rate follows the trains
+
+Every image the server sends carries an `X-Refresh-Seconds` header, and the
+Kindle sleeps for exactly that long. While the next train is more than 45
+minutes away it is `refresh.farMinutes` (10); inside 45 minutes it is
+`midMinutes` (5); inside 15 minutes it is `nearMinutes` (2), so the countdown
+and the little train visibly move as departure approaches. Outside those
+windows the Kindle sleeps the long interval and battery is spent where it
+matters. Set `ADAPTIVE=0` in `env.sh` for a fixed interval. Every fetch is
+also appended to `dashboard/out/fetch.log` with the battery level, which is
+the raw material for a battery graph later.
+
+### Weather location
+
+On the settings page, type a city into **Weather location** and save: the
+server looks it up with Open-Meteo's geocoder and stores the name,
+coordinates and timezone in `config.local.json`. The next render uses it.
 
 ### The frog
 

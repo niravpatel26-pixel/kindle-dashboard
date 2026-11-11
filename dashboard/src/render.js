@@ -19,6 +19,18 @@ async function getBrowser() {
   if (!browser) browser = await chromium.launch();
   return browser;
 }
+// How long the Kindle should sleep before the next fetch: short while a train
+// is close (so the countdown and the little train move), long otherwise.
+export function refreshSeconds(config, transit) {
+  const r = config.refresh ?? {};
+  const far = (r.farMinutes ?? 10) * 60, mid = (r.midMinutes ?? 5) * 60, near = (r.nearMinutes ?? 2) * 60;
+  const next = transit?.departures?.[0];
+  if (!next || next.inMin == null) return far;
+  if (next.inMin <= (r.nearWindowMinutes ?? 15)) return near;
+  if (next.inMin <= (r.midWindowMinutes ?? 45)) return mid;
+  return far;
+}
+
 export async function closeBrowser() {
   if (browser) { await browser.close(); browser = null; }
 }
@@ -36,11 +48,11 @@ export async function buildHtml({ battery } = {}) {
   const html = renderHtml({ config, device, weather, transit, battery, now, error });
   fs.mkdirSync(OUT, { recursive: true });
   fs.writeFileSync(path.join(OUT, 'dashboard.html'), html);
-  return { html, config, device, error };
+  return { html, config, device, error, transit };
 }
 
 export async function renderPng({ battery, outFile = 'dashboard.png' } = {}) {
-  const { device, config, error } = await buildHtml({ battery });
+  const { device, config, error, transit } = await buildHtml({ battery });
   let page;
   try {
     page = await (await getBrowser()).newPage({
@@ -52,7 +64,7 @@ export async function renderPng({ battery, outFile = 'dashboard.png' } = {}) {
     const shot = await page.screenshot({ type: 'png', timeout: 30000 });
     const png = toKindlePng(shot, { rotate: device.rotate, gamma: config.device.gamma ?? 1 });
     fs.writeFileSync(path.join(OUT, outFile), png);
-    return { png, device, error };
+    return { png, device, error, transit, refreshSeconds: refreshSeconds(config, transit) };
   } catch (e) {
     // A crashed or hung Chromium would otherwise poison every later render:
     // drop it so the next request launches a fresh one.

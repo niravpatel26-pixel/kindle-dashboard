@@ -57,10 +57,12 @@ const server = http.createServer(async (req, res) => {
     url = new URL(req.url, 'http://localhost');   // can throw on a malformed request target
     battery = url.searchParams.get('battery');
     if (url.pathname === '/dashboard.png') {
-      const { png, error } = await enqueue(() => renderPng({ battery }));
-      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length, 'Cache-Control': 'no-store' });
+      const { png, error, refreshSeconds: next } = await enqueue(() => renderPng({ battery }));
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length, 'Cache-Control': 'no-store', 'X-Refresh-Seconds': String(next) });
       res.end(png);
-      log(req, 200, t0, error ? `weather error: ${error}` : `battery=${battery ?? '-'}`);
+      log(req, 200, t0, `${error ? `weather error: ${error} ` : ''}battery=${battery ?? '-'} next=${next}s`);
+      // One line per fetch, kept forever: a record of when the Kindle woke and its battery.
+      try { fs.appendFileSync(path.join(OUT, 'fetch.log'), `${new Date().toISOString()} battery=${battery ?? '-'} ${url.searchParams.has('t') ? 'loop' : 'test'} ${req.socket.remoteAddress ?? ''}\n`); } catch { /* not fatal */ }
     } else if (url.pathname === '/' || url.pathname === '/dashboard.html') {
       const { html } = await enqueue(() => buildHtml({ battery }));   // shares out/dashboard.html with renders
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -97,6 +99,19 @@ const server = http.createServer(async (req, res) => {
       catch (e) { res.writeHead(303, { Location: '/settings?error=' + encodeURIComponent(e.message) }); return res.end(); }
       res.writeHead(303, { Location: '/settings?saved=1' }); res.end();
       log(req, 303, t0, `route ${from}→${to || '-'}`);
+    } else if (url.pathname === '/location' && req.method === 'POST') {
+      // City name → coordinates + timezone via Open-Meteo's free geocoder.
+      const q = ((await formBody(req)).get('place') ?? '').trim().slice(0, 80);
+      if (!q) { res.writeHead(303, { Location: '/settings?error=' + encodeURIComponent('Type a place name') }); return res.end(); }
+      const g = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=1&language=en&format=json`, { signal: AbortSignal.timeout(15000) }).then((r) => r.json()).catch(() => null);
+      const hit = g?.results?.[0];
+      if (!hit) { res.writeHead(303, { Location: '/settings?error=' + encodeURIComponent(`Could not find "${q}"`) }); return res.end(); }
+      const name = hit.admin1 && hit.admin1 !== hit.name ? `${hit.name}, ${hit.admin1}` : hit.name;
+      try { writeLocalConfig({ location: { name, latitude: hit.latitude, longitude: hit.longitude, timezone: hit.timezone } }); }
+      catch (e) { res.writeHead(303, { Location: '/settings?error=' + encodeURIComponent(e.message) }); return res.end(); }
+      try { fs.rmSync(path.join(OUT, 'weather-cache.json'), { force: true }); } catch { /* fine */ }
+      res.writeHead(303, { Location: '/settings?saved=1' }); res.end();
+      log(req, 303, t0, `location ${name} (${hit.latitude}, ${hit.longitude}) ${hit.timezone}`);
     } else if (url.pathname === '/opds' || url.pathname === '/opds/') {
       const books = scanLibrary(LIB_ROOTS);
       const baseUrl = `http://${req.headers.host || `localhost:${PORT}`}`;

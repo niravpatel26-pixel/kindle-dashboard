@@ -37,6 +37,13 @@
     "count": 4,
     "metrolinxKey": ""
   },
+  "refresh": {
+    "farMinutes": 10,
+    "midMinutes": 5,
+    "nearMinutes": 2,
+    "nearWindowMinutes": 15,
+    "midWindowMinutes": 45
+  },
   "cache": {
     "weatherMinutes": 10
   },

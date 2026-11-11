@@ -42,6 +42,7 @@ export function settingsPage({ cfg, stations, next, saved, error }) {
   .flash { background: #111; color: #fff; padding: 0.6rem 0.9rem; border-radius: 8px; font-size: 0.9rem; margin-bottom: 1rem; }
   .flash.err { background: #b00020; }
   .links { font-size: 0.85rem; color: #666; } .links a { color: #111; }
+  .muted { color: #888; font-weight: 400; }
 </style></head>
 <body><main>
   <h1>Kindle dashboard</h1>
@@ -67,6 +68,14 @@ export function settingsPage({ cfg, stations, next, saved, error }) {
         <label>Trains shown <input type="number" name="count" min="1" max="6" value="${Number(t.count) || 4}"></label>
       </div>
       <button class="save" type="submit">Save route</button>
+    </form>
+  </section>
+  <section class="card">
+    <h2>Weather location</h2>
+    <form method="post" action="/location">
+      <label>Now: <b>${esc(cfg.location?.name ?? '')}</b> <span class="muted">(${esc(cfg.location?.timezone ?? '')})</span></label>
+      <label>Change to <input type="text" name="place" placeholder="City, e.g. Oshawa or Toronto" autocomplete="off"></label>
+      <button class="save" type="submit">Look up and save</button>
     </form>
   </section>
   <section class="card">
