@@ -45,6 +45,21 @@ wifi_on() {
   # tells the Wi-Fi daemon to reconnect (needed after a resume)
   lipc-set-prop com.lab126.cmd wirelessEnable 1 >/dev/null 2>&1
   lipc-set-prop com.lab126.wifid enable 1 >/dev/null 2>&1
+  wifi_wait && return 0
+  # After a resume the daemon sometimes sits in a dead state until the radio is
+  # cycled, so one more try, off and on, before giving up on this cycle.
+  log "wifi: no link after ${WIFI_TIMEOUT}s (state $(lipc-get-prop com.lab126.wifid cmState 2>/dev/null)), cycling the radio"
+  lipc-set-prop com.lab126.wifid enable 0 >/dev/null 2>&1
+  lipc-set-prop com.lab126.cmd wirelessEnable 0 >/dev/null 2>&1
+  sleep 3
+  lipc-set-prop com.lab126.cmd wirelessEnable 1 >/dev/null 2>&1
+  lipc-set-prop com.lab126.wifid enable 1 >/dev/null 2>&1
+  wifi_wait && return 0
+  log "wifi state: $(lipc-get-prop com.lab126.wifid cmState 2>/dev/null)"
+  return 1
+}
+
+wifi_wait() {
   i=0
   while [ "$i" -lt "$WIFI_TIMEOUT" ]; do
     [ "$(lipc-get-prop com.lab126.wifid cmState 2>/dev/null)" = "CONNECTED" ] && return 0
@@ -52,7 +67,6 @@ wifi_on() {
     sleep 1
     i=$((i + 1))
   done
-  log "wifi state: $(lipc-get-prop com.lab126.wifid cmState 2>/dev/null)"
   return 1
 }
 
@@ -159,14 +173,21 @@ suspend_for() {
 # seconds from now; powerd then suspends and the script is frozen until resume.
 suspend_via_powerd() {
   secs=$1
-  lipc-set-prop com.lab126.powerd powerButton 1 >>"$LOG" 2>&1 || { log "powerd: powerButton refused"; return 1; }
+  # The hold we keep while awake would stop powerd from honouring the press.
+  lipc-set-prop com.lab126.powerd preventScreenSaver 0 >/dev/null 2>&1
+  if ! lipc-set-prop com.lab126.powerd powerButton 1 >>"$LOG" 2>&1; then
+    log "powerd: powerButton refused"
+    lipc-set-prop com.lab126.powerd preventScreenSaver 1 >/dev/null 2>&1
+    return 1
+  fi
   i=0
-  while [ "$i" -lt 20 ]; do
+  while [ "$i" -lt 15 ]; do
     [ "$(lipc-get-prop com.lab126.powerd state 2>/dev/null)" = "readyToSuspend" ] && break
-    sleep 0.5; i=$((i + 1))
+    sleep 1; i=$((i + 1))
   done
   if ! lipc-set-prop com.lab126.powerd rtcWakeup "$secs" >>"$LOG" 2>&1; then
     log "powerd: rtcWakeup refused (state $(lipc-get-prop com.lab126.powerd state 2>/dev/null))"
+    lipc-set-prop com.lab126.powerd preventScreenSaver 1 >/dev/null 2>&1
     return 1
   fi
   ts=$(date +%s); iters=0
@@ -175,23 +196,38 @@ suspend_via_powerd() {
     el=$(( $(date +%s) - ts ))
     if [ "$el" -gt $(( iters * 5 + 10 )) ]; then SUSPENDED=1; break; fi   # time jumped: we were asleep
     [ "$el" -ge "$secs" ] && break
-    if [ "$iters" -ge 9 ]; then log "powerd: did not suspend within 45s (state $(lipc-get-prop com.lab126.powerd state 2>/dev/null))"; return 1; fi
+    if [ "$iters" -ge 9 ]; then
+      log "powerd: did not suspend within 45s (state $(lipc-get-prop com.lab126.powerd state 2>/dev/null))"
+      lipc-set-prop com.lab126.powerd preventScreenSaver 1 >/dev/null 2>&1
+      return 1
+    fi
   done
+  # Awake again: hold powerd off until the next cycle's own press, or it may
+  # put the device straight back to sleep before the fetch is done.
+  lipc-set-prop com.lab126.powerd preventScreenSaver 1 >/dev/null 2>&1
+  [ "$SUSPENDED" = 1 ] && log "slept ${el}s via powerd (state $(lipc-get-prop com.lab126.powerd state 2>/dev/null))"
   return 0
 }
 
-# Kernel RTC alarm + direct suspend. Never suspend without a confirmed alarm:
-# the device would sleep until a button press and the dashboard would stop.
 suspend_via_sysfs() {
   secs=$1
   t1=$(date +%s)
-  if [ -w /sys/class/rtc/rtc0/wakealarm ]; then
-    echo 0 > /sys/class/rtc/rtc0/wakealarm 2>/dev/null
-    rtcnow=$(cat /sys/class/rtc/rtc0/since_epoch 2>/dev/null); [ -z "$rtcnow" ] && rtcnow=$t1
-    if echo $(( rtcnow + secs )) > /sys/class/rtc/rtc0/wakealarm 2>>"$LOG" && [ "$(cat /sys/class/rtc/rtc0/wakealarm 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+  # Kindles carry more than one RTC; only the one marked wakeup-capable can
+  # bring the device back, so prefer it over rtc0.
+  rtc=""
+  for d in /sys/class/rtc/rtc*; do
+    [ -w "$d/wakealarm" ] || continue
+    [ -z "$rtc" ] && rtc=$d
+    [ "$(cat "$d/device/power/wakeup" 2>/dev/null)" = "enabled" ] && { rtc=$d; break; }
+  done
+  if [ -n "$rtc" ]; then
+    echo 0 > "$rtc/wakealarm" 2>/dev/null
+    rtcnow=$(cat "$rtc/since_epoch" 2>/dev/null); [ -z "$rtcnow" ] && rtcnow=$t1
+    if echo $(( rtcnow + secs )) > "$rtc/wakealarm" 2>>"$LOG" && [ "$(cat "$rtc/wakealarm" 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+      log "sysfs: alarm on ${rtc##*/}"
       echo mem > /sys/power/state 2>>"$LOG"
     else
-      log "sysfs: could not arm rtc0 alarm"; return 1
+      log "sysfs: could not arm ${rtc##*/} alarm"; return 1
     fi
   elif [ -w /sys/devices/platform/mxc_rtc.0/wakeup_enable ]; then
     if echo -n "$secs" > /sys/devices/platform/mxc_rtc.0/wakeup_enable 2>>"$LOG"; then
@@ -304,7 +340,8 @@ listen_for_taps() {
 init() {
   log "=== dashboard start (url $DASH_URL, every ${REFRESH_MINUTES}m, quiet ${QUIET_START}-${QUIET_END}) ==="
   sleep 3   # let the scriptlet runner finish drawing before we take the screen
-  /etc/init.d/framework stop >>"$LOG" 2>&1 || initctl stop framework >>"$LOG" 2>&1 || stop framework >>"$LOG" 2>&1
+  # upstart on firmware 5.x; the older forms are for the sake of old models
+  stop framework >>"$LOG" 2>&1 || initctl stop framework >>"$LOG" 2>&1 || /etc/init.d/framework stop >>"$LOG" 2>&1
   lipc-set-prop com.lab126.powerd preventScreenSaver 1 >/dev/null 2>&1
   echo powersave > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null
   eips -c >/dev/null 2>&1
