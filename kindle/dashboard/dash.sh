@@ -24,6 +24,10 @@ QUIET_START=$(num "$QUIET_START" -1); QUIET_END=$(num "$QUIET_END" 7)
 FULL_REFRESH_EVERY=$(num "$FULL_REFRESH_EVERY" 6); [ "$FULL_REFRESH_EVERY" -lt 1 ] && FULL_REFRESH_EVERY=1
 WIFI_TIMEOUT=$(num "$WIFI_TIMEOUT" 45); [ "$WIFI_TIMEOUT" -lt 5 ] && WIFI_TIMEOUT=5
 FETCH_TIMEOUT=$(num "$FETCH_TIMEOUT" 90); [ "$FETCH_TIMEOUT" -lt 10 ] && FETCH_TIMEOUT=10
+TAP_WINDOW=$(num "$TAP_WINDOW" 25); [ "$TAP_WINDOW" -gt 120 ] && TAP_WINDOW=120
+TOUCH_W=$(num "$TOUCH_W" 1072); TOUCH_H=$(num "$TOUCH_H" 1448); TOUCH_ROTATE=$(num "$TOUCH_ROTATE" 0)
+TAPFILE="$DIR/tap.txt"
+WOKE_EARLY=0
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 
@@ -140,11 +144,104 @@ suspend_for() {
     return
   fi
   el=$(( $(date +%s) - t0 ))
-  if [ "$el" -lt "$secs" ]; then
-    rem=$(( secs - el ))
-    log "woke early after ${el}s, sleeping ${rem}s more"
-    sleep "$rem"
+  if [ "$el" -lt $(( secs - 5 )) ]; then
+    # Something other than the alarm woke us: the power button (or USB).
+    # Treat it as "show me now": the main loop refreshes and listens for taps.
+    log "woke early after ${el}s (button or USB)"
+    WOKE_EARLY=1
   fi
+}
+
+# ---------- tap controls ----------
+# The touchscreen is a Linux evdev node; each event is 16 bytes on this
+# 32-bit ARM kernel: sec(4) usec(4) type(2) code(2) value(4). We read one
+# event at a time with dd and decode it with od, which busybox provides.
+find_touch() {
+  [ -n "$TOUCH_DEV" ] && [ -e "$TOUCH_DEV" ] && return 0
+  for e in /sys/class/input/event*; do
+    [ -e "$e" ] || continue
+    name=$(cat "$e/device/name" 2>/dev/null)
+    case "$name" in
+      *[Tt]ouch*|*[Zz]force*|*[Cc]yttsp*|*[Ee]lan*|*[Pp]ixcir*|*[Ww]acom*|*[Ff]t5*|*[Gg]oodix*)
+        TOUCH_DEV="/dev/input/$(basename "$e")"; return 0 ;;
+    esac
+  done
+  [ -e /dev/input/event1 ] && { TOUCH_DEV=/dev/input/event1; return 0; }
+  return 1
+}
+
+# Runs in the background; appends "x y" to $TAPFILE when a finger lifts.
+touch_reader() {
+  x=0; y=0; down=0; lastsec=0; lastxy=""
+  while :; do
+    rec=$(dd if="$TOUCH_DEV" bs=16 count=1 2>/dev/null | od -An -tu2 -v 2>/dev/null | tr -s ' \n' ' ')
+    [ -z "$rec" ] && { sleep 1; continue; }
+    set -- $rec
+    [ $# -lt 8 ] && continue
+    type=$5; code=$6; vlo=$7; vhi=$8
+    lift=0
+    if [ "$type" = 3 ]; then
+      case "$code" in
+        0|53) [ "$vhi" = 0 ] && x=$vlo ;;                      # ABS_X / ABS_MT_POSITION_X
+        1|54) [ "$vhi" = 0 ] && y=$vlo ;;                      # ABS_Y / ABS_MT_POSITION_Y
+        57) [ "$vlo" = 65535 ] && [ "$vhi" = 65535 ] && lift=1 ;;   # ABS_MT_TRACKING_ID = -1
+      esac
+    elif [ "$type" = 1 ] && [ "$code" = 330 ]; then              # BTN_TOUCH
+      [ "$vlo" = 1 ] && down=1
+      [ "$vlo" = 0 ] && [ "$down" = 1 ] && { down=0; lift=1; }
+    fi
+    if [ "$lift" = 1 ]; then
+      now=$(date +%s)
+      # the same lift often arrives twice (BTN_TOUCH and TRACKING_ID): keep one per second per spot
+      if [ "$now" != "$lastsec" ] || [ "$x,$y" != "$lastxy" ]; then
+        echo "$x $y" >> "$TAPFILE"
+        lastsec=$now; lastxy="$x,$y"
+      fi
+    fi
+  done
+}
+
+# Map a raw tap to an action and apply it on the server, then redraw.
+handle_tap() {
+  x=$1; y=$2
+  case "$TOUCH_ROTATE" in
+    90)  nx=$y; ny=$(( TOUCH_W - x )); x=$nx; y=$ny ;;
+    270) nx=$(( TOUCH_H - y )); ny=$x; x=$nx; y=$ny ;;
+  esac
+  if [ "$y" -lt $(( TOUCH_H / 4 )) ]; then act=auto
+  elif [ "$x" -lt $(( TOUCH_W / 2 )) ]; then act=there
+  else act=back
+  fi
+  log "tap $1 $2 -> $act"
+  base=${DASH_URL%/dashboard.png}
+  if command -v curl >/dev/null 2>&1; then
+    curl -s -m 10 -o /dev/null -X POST -d "trip=$act" "$base/toggle" 2>>"$LOG"
+  else
+    wget -q -T 10 -O /dev/null --post-data "trip=$act" "$base/toggle" 2>>"$LOG"
+  fi
+  fetch && show
+}
+
+# Listen for taps for $1 seconds; every tap extends the window.
+listen_for_taps() {
+  [ "$1" -le 0 ] && return
+  find_touch || { log "no touchscreen device found; tap controls off"; return; }
+  : > "$TAPFILE"
+  touch_reader &
+  rp=$!
+  log "listening for taps on $TOUCH_DEV for ${1}s"
+  end=$(( $(date +%s) + $1 ))
+  while [ "$(date +%s)" -lt "$end" ]; do
+    if [ -s "$TAPFILE" ]; then
+      read -r tx ty < "$TAPFILE"
+      : > "$TAPFILE"
+      handle_tap "$tx" "$ty"
+      end=$(( $(date +%s) + $1 ))
+    fi
+    sleep 1
+  done
+  kill "$rp" 2>/dev/null
+  wait "$rp" 2>/dev/null
 }
 
 init() {
@@ -160,15 +257,16 @@ n=0
 fails=0
 init
 while true; do
-  if in_quiet_hours; then
+  if in_quiet_hours && [ "$WOKE_EARLY" != 1 ]; then
     wifi_off
     suspend_for "$(secs_until_quiet_end)"
     n=0
     continue
   fi
+  button=$WOKE_EARLY; WOKE_EARLY=0
   if wifi_on; then
     if fetch; then
-      if [ $((n % FULL_REFRESH_EVERY)) -eq 0 ]; then show full; else show; fi
+      if [ $((n % FULL_REFRESH_EVERY)) -eq 0 ] || [ "$button" = 1 ]; then show full; else show; fi
       n=$((n + 1))
       fails=0
       log "updated, battery $(battery)%"
@@ -179,6 +277,8 @@ while true; do
   else
     log "wifi not connected after ${WIFI_TIMEOUT}s"
   fi
+  # Right after Start, and after every button wake, give the user a moment to tap.
+  if [ "$n" = 1 ] || [ "$button" = 1 ]; then listen_for_taps "$TAP_WINDOW"; fi
   wifi_off
   sleep 2
   # the server's hint wins when ADAPTIVE=1 and it is sane; otherwise the fixed interval

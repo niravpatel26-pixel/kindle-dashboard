@@ -36,5 +36,21 @@ FETCH_TIMEOUT=90
 # 1 = leave Wi-Fi on between refreshes (worse battery, lets SSH reach the Kindle).
 WIFI_ALWAYS_ON=0
 
+# Tap controls. A sleeping Kindle cannot be woken by touch, so: press the
+# power button, then tap within TAP_WINDOW seconds (each tap extends it).
+#   left half  = Going      right half = Returning      top band = Auto
+# Every tap also refreshes the board at once. The loop also listens right
+# after Dashboard: Start. Set TAP_WINDOW=0 to turn tap controls off.
+TAP_WINDOW=25
+# Touch panel size in its own units (PW3/PW4/KT5: same as the screen) and
+# how the panel is turned relative to the page: 0 for an upright Kindle,
+# 90 or 270 for a sideways mount. Raw taps are written to logs/dash.log,
+# so if the zones feel wrong, read the numbers there and adjust these.
+TOUCH_W=1072
+TOUCH_H=1448
+TOUCH_ROTATE=0
+# Leave empty to find the touchscreen automatically (e.g. /dev/input/event1).
+TOUCH_DEV=""
+
 # 1 = plain sleep instead of suspend-to-RAM (use while testing over SSH).
 DEBUG=0

@@ -101,6 +101,19 @@ https://api.openmetrolinx.com/OpenDataAPI/Help/Registration/en . Paste it into
 cd dashboard && node src/transit.js --from OA --to UN --trip auto
 ```
 
+### Tap controls on the Kindle
+
+A sleeping Kindle cannot be woken by touch, so the controls work in two
+steps: **press the power button**, then **tap** within about 25 seconds
+(each tap extends the window). The left half of the screen means **Going**,
+the right half **Returning**, and the top band (the clock) **Auto**. The tap
+is sent to the server, which keeps the setting (so the phone page shows the
+same state), and the board is redrawn at once with the new header. The loop
+also listens for taps right after **Dashboard: Start**, so you can try it
+immediately. `TAP_WINDOW`, the panel size and a `TOUCH_ROTATE` for sideways
+mounts are in `env.sh`; every raw tap is written to `logs/dash.log`, which is
+how to calibrate the zones if they feel off.
+
 ### Refresh rate follows the trains
 
 Every image the server sends carries an `X-Refresh-Seconds` header, and the
@@ -159,6 +172,8 @@ books download straight to the Kindle. Details in [docs/koreader.md](docs/koread
 
 Getting the normal Kindle back: hold the power button about 7 seconds to reboot
 (the dashboard does not start on boot), or `ssh -p 2222 root@<kindle-ip> sh /mnt/us/dashboard/stop.sh`.
+A short press of the power button while the dashboard runs just wakes it for a
+fresh fetch and a tap window.
 
 ## How the loop saves battery
 
