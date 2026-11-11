@@ -49,8 +49,15 @@ TAP_WINDOW=25
 TOUCH_W=1072
 TOUCH_H=1448
 TOUCH_ROTATE=0
-# Leave empty to find the touchscreen automatically (e.g. /dev/input/event1).
+# Leave empty to find the touchscreen automatically. Paperwhite 4 (Wi-Fi):
+# /dev/input/event2; most older models: /dev/input/event1.
 TOUCH_DEV=""
+
+# How to sleep between refreshes. "auto" tries, in order: the Kindle's own
+# power manager (what KOReader uses: powerd suspends and sets the RTC alarm),
+# then the kernel's RTC alarm files, then plain sleep. Force one for testing:
+# powerd | sysfs | sleep.
+SUSPEND_METHOD=auto
 
 # 1 = plain sleep instead of suspend-to-RAM (use while testing over SSH).
 DEBUG=0

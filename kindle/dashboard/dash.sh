@@ -37,19 +37,28 @@ battery() {
   echo "$b"
 }
 
+# The server's host, for a reachability ping (lipc can be slow to report after resume).
+SERVER_HOST=$(echo "$DASH_URL" | sed -n 's#^[a-z]*://\([^/:]*\).*#\1#p')
+
 wifi_on() {
+  # both properties, as KOReader does: the first turns the radio on, the second
+  # tells the Wi-Fi daemon to reconnect (needed after a resume)
   lipc-set-prop com.lab126.cmd wirelessEnable 1 >/dev/null 2>&1
+  lipc-set-prop com.lab126.wifid enable 1 >/dev/null 2>&1
   i=0
   while [ "$i" -lt "$WIFI_TIMEOUT" ]; do
     [ "$(lipc-get-prop com.lab126.wifid cmState 2>/dev/null)" = "CONNECTED" ] && return 0
+    [ -n "$SERVER_HOST" ] && ping -c 1 -W 1 "$SERVER_HOST" >/dev/null 2>&1 && return 0
     sleep 1
     i=$((i + 1))
   done
+  log "wifi state: $(lipc-get-prop com.lab126.wifid cmState 2>/dev/null)"
   return 1
 }
 
 wifi_off() {
   [ "$WIFI_ALWAYS_ON" = "1" ] && return 0
+  lipc-set-prop com.lab126.wifid enable 0 >/dev/null 2>&1
   lipc-set-prop com.lab126.cmd wirelessEnable 0 >/dev/null 2>&1
 }
 
@@ -105,51 +114,99 @@ secs_until_quiet_end() {
   if [ "$end" -gt "$now" ]; then echo $((end - now)); else echo $((86400 - now + end)); fi
 }
 
-# Suspend to RAM with an RTC alarm. Tries the interfaces different Kindle
-# kernels expose. If suspend returns early (USB plugged in, button press), sleep
-# out the remainder so we never spin.
+# Sleep until the next refresh. Three methods, tried in order under "auto":
+#   powerd  the Kindle's own power manager suspends and arms the RTC (what
+#           KOReader does on every modern Kindle)
+#   sysfs   the kernel's RTC alarm file plus /sys/power/state
+#   sleep   stay awake (last resort, costs battery)
+# Each method sets SUSPENDED=1 only when the clock jumped while the script was
+# frozen, i.e. the device really slept. A short real sleep means the power
+# button woke us (WOKE_EARLY=1: refresh now and listen for taps); a method
+# that returned without sleeping is a failure, and we wait out the interval
+# awake rather than spinning.
+SUSPENDED=0
 suspend_for() {
   secs=$1
   [ "$secs" -lt 20 ] && secs=20
   if [ "$DEBUG" = "1" ]; then log "debug sleep ${secs}s"; sleep "$secs"; return; fi
-  # never sleep through the start of quiet hours or past a day boundary by more than needed
-  [ "$secs" -gt 43200 ] && secs=43200
-  log "suspend ${secs}s"
+  # Cap a single suspend under an hour: longer ones can turn into hibernation
+  # on newer Kindles, which is slow to resume. The loop just goes back to sleep.
+  [ "$secs" -gt 3300 ] && secs=3300
+  log "suspend ${secs}s (method $SUSPEND_METHOD)"
   sync
+  SUSPENDED=0
   t0=$(date +%s)
+  if [ "$SUSPEND_METHOD" = "sleep" ]; then sleep "$secs"; return; fi
+  if [ "$SUSPEND_METHOD" != "sysfs" ] && command -v lipc-set-prop >/dev/null 2>&1; then
+    suspend_via_powerd "$secs"
+  fi
+  if [ "$SUSPENDED" = 0 ] && [ "$SUSPEND_METHOD" != "powerd" ]; then
+    suspend_via_sysfs "$secs"
+  fi
+  el=$(( $(date +%s) - t0 ))
+  if [ "$SUSPENDED" = 0 ]; then
+    rem=$(( secs - el )); [ "$rem" -lt 0 ] && rem=0
+    log "did not suspend; waiting ${rem}s awake"
+    [ "$rem" -gt 0 ] && sleep "$rem"
+  elif [ "$el" -lt $(( secs - 5 )) ]; then
+    log "woke early after ${el}s (button or USB)"
+    WOKE_EARLY=1
+  fi
+}
+
+# powerd: a simulated power-button press puts it into "readyToSuspend" for
+# about ten seconds; the RTC alarm may only be set during that window, in
+# seconds from now; powerd then suspends and the script is frozen until resume.
+suspend_via_powerd() {
+  secs=$1
+  lipc-set-prop com.lab126.powerd powerButton 1 >>"$LOG" 2>&1 || { log "powerd: powerButton refused"; return 1; }
+  i=0
+  while [ "$i" -lt 20 ]; do
+    [ "$(lipc-get-prop com.lab126.powerd state 2>/dev/null)" = "readyToSuspend" ] && break
+    sleep 0.5; i=$((i + 1))
+  done
+  if ! lipc-set-prop com.lab126.powerd rtcWakeup "$secs" >>"$LOG" 2>&1; then
+    log "powerd: rtcWakeup refused (state $(lipc-get-prop com.lab126.powerd state 2>/dev/null))"
+    return 1
+  fi
+  ts=$(date +%s); iters=0
+  while :; do
+    sleep 5; iters=$((iters + 1))
+    el=$(( $(date +%s) - ts ))
+    if [ "$el" -gt $(( iters * 5 + 10 )) ]; then SUSPENDED=1; break; fi   # time jumped: we were asleep
+    [ "$el" -ge "$secs" ] && break
+    if [ "$iters" -ge 9 ]; then log "powerd: did not suspend within 45s (state $(lipc-get-prop com.lab126.powerd state 2>/dev/null))"; return 1; fi
+  done
+  return 0
+}
+
+# Kernel RTC alarm + direct suspend. Never suspend without a confirmed alarm:
+# the device would sleep until a button press and the dashboard would stop.
+suspend_via_sysfs() {
+  secs=$1
+  t1=$(date +%s)
   if [ -w /sys/class/rtc/rtc0/wakealarm ]; then
-    # Never suspend without a confirmed alarm: the device would sleep until a
-    # button press and the dashboard would silently stop.
     echo 0 > /sys/class/rtc/rtc0/wakealarm 2>/dev/null
-    # the RTC may run ahead of or behind the system clock: set the alarm relative to the RTC's own time
-    rtcnow=$(cat /sys/class/rtc/rtc0/since_epoch 2>/dev/null); [ -z "$rtcnow" ] && rtcnow=$t0
+    rtcnow=$(cat /sys/class/rtc/rtc0/since_epoch 2>/dev/null); [ -z "$rtcnow" ] && rtcnow=$t1
     if echo $(( rtcnow + secs )) > /sys/class/rtc/rtc0/wakealarm 2>>"$LOG" && [ "$(cat /sys/class/rtc/rtc0/wakealarm 2>/dev/null)" -gt 0 ] 2>/dev/null; then
       echo mem > /sys/power/state 2>>"$LOG"
     else
-      log "could not arm the RTC alarm, sleeping instead of suspending"
-      sleep "$secs"; return
+      log "sysfs: could not arm rtc0 alarm"; return 1
     fi
   elif [ -w /sys/devices/platform/mxc_rtc.0/wakeup_enable ]; then
     if echo -n "$secs" > /sys/devices/platform/mxc_rtc.0/wakeup_enable 2>>"$LOG"; then
       echo mem > /sys/power/state 2>>"$LOG"
     else
-      log "could not arm the RTC alarm, sleeping instead of suspending"
-      sleep "$secs"; return
+      log "sysfs: could not arm mxc_rtc alarm"; return 1
     fi
   elif command -v rtcwake >/dev/null 2>&1; then
     rtcwake -m mem -s "$secs" >>"$LOG" 2>&1
   else
-    log "no RTC wake interface found, using sleep"
-    sleep "$secs"
-    return
+    log "sysfs: no RTC interface found"; return 1
   fi
-  el=$(( $(date +%s) - t0 ))
-  if [ "$el" -lt $(( secs - 5 )) ]; then
-    # Something other than the alarm woke us: the power button (or USB).
-    # Treat it as "show me now": the main loop refreshes and listens for taps.
-    log "woke early after ${el}s (button or USB)"
-    WOKE_EARLY=1
-  fi
+  # "echo mem" only returns after resume; a near-instant return means it failed
+  [ $(( $(date +%s) - t1 )) -ge 10 ] && SUSPENDED=1
+  return 0
 }
 
 # ---------- tap controls ----------
@@ -166,7 +223,7 @@ find_touch() {
         TOUCH_DEV="/dev/input/$(basename "$e")"; return 0 ;;
     esac
   done
-  [ -e /dev/input/event1 ] && { TOUCH_DEV=/dev/input/event1; return 0; }
+  for d in /dev/input/event2 /dev/input/event1; do [ -e "$d" ] && { TOUCH_DEV=$d; return 0; }; done
   return 1
 }
 
